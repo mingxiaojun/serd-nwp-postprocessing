@@ -1,0 +1,8 @@
+cff-version: 1.2.0
+title: "SERD: Systematic-error-corrected Residual Diffusion for NWP Post-processing"
+message: "If you use this code, please cite the associated manuscript."
+authors:
+  - family-names: Wang
+    given-names: Mingming
+version: 0.1.0
+date-released: 2026-06-27
