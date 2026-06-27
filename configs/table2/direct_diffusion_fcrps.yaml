@@ -1,0 +1,23 @@
+experiment:
+  id: direct_diffusion_fcrps
+  table2_name: Direct diffusion + fCRPS
+  purpose: Generate total forecast error directly and apply fCRPS to total-error reconstructions.
+data:
+  data_root_glob: /path/to/CMA_gfs_time_order_3_72/*[0-9]
+  data_dir: ./data
+  topo_path: ./data/topo_data_Normalization.npy
+  train_count: 1292
+  valid_count: 92
+model:
+  ensemble_size: 16
+  lambda_score: 1.0
+  lambda_fcrps: 0.5
+outputs:
+  checkpoint_dir: ./outputs/checkpoints/direct_diffusion_fcrps
+  best_checkpoint: vesde_physcond_direct_diffusion_fcrps_best.pth
+  prediction_root: ./outputs/predictions/direct_diffusion_fcrps
+  metric_dir: ./outputs/metrics/direct_diffusion_fcrps
+scripts:
+  train: scripts/train_direct_diffusion_fcrps.py
+  infer: scripts/infer_direct_diffusion_fcrps.py
+  evaluate: scripts/evaluate_ensemble.py

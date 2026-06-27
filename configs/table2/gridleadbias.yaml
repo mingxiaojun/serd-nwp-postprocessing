@@ -1,0 +1,18 @@
+experiment:
+  id: gridleadbias
+  table2_name: GridLeadBias
+  purpose: Grid- and lead-dependent climatological bias correction with residual Gaussian uncertainty.
+data:
+  data_root_glob: /path/to/CMA_gfs_time_order_3_72/*[0-9]
+  data_dir: ./data
+  train_count: 1292
+  valid_count: 92
+model:
+  ensemble_size: 16
+outputs:
+  checkpoint_dir: ./outputs/checkpoints/gridleadbias
+  metric_files:
+    valid: allvars_gridlead_bias_valid_metrics.npz
+    test: allvars_gridlead_bias_test_metrics.npz
+scripts:
+  train_and_evaluate: scripts/train_gridleadbias.py

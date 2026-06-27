@@ -1,0 +1,22 @@
+experiment:
+  id: ngr_like_gaussian_mos
+  table2_name: NGR-like Gaussian MOS
+  purpose: Error-space heteroscedastic Gaussian MOS using forecast, terrain, lead, and seasonal covariates.
+data:
+  data_root_glob: /path/to/CMA_gfs_time_order_3_72/*[0-9]
+  data_dir: ./data
+  topo_path: ./data/topo_data_Normalization.npy
+  train_count: 1292
+  valid_count: 92
+model:
+  ensemble_size: 16
+outputs:
+  checkpoint_dir: ./outputs/checkpoints/ngr_like_gaussian_mos
+  params_file: traditional_ngr_error_covsigma_params.npz
+  prediction_root: ./outputs/predictions/ngr_like_gaussian_mos
+  metric_files:
+    valid: traditional_ngr_error_covsigma_valid_metrics.npz
+    test: traditional_ngr_error_covsigma_test_metrics.npz
+scripts:
+  train: scripts/train_ngr_baseline.py
+  infer: scripts/infer_ngr_baseline.py

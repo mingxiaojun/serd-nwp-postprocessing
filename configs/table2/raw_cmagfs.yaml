@@ -1,0 +1,16 @@
+experiment:
+  id: raw_cmagfs
+  table2_name: CMA-GFS
+  purpose: Original deterministic forecast baseline.
+data:
+  data_root_glob: /path/to/CMA_gfs_time_order_3_72/*[0-9]
+  data_dir: ./data
+  train_count: 1292
+  valid_count: 92
+evaluation:
+  split: test
+  note: Evaluate raw deterministic forecast RMSE against CMA-RRA analysis.
+outputs:
+  metric_dir: ./outputs/metrics/raw_cmagfs
+scripts:
+  evaluate: scripts/evaluate_raw_cmagfs.py

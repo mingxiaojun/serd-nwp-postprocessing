@@ -1,0 +1,23 @@
+experiment:
+  id: corrdiff
+  table2_name: CorrDiff
+  purpose: CorrDiff-style target/residual generative baseline without fCRPS.
+data:
+  data_root_glob: /path/to/CMA_gfs_time_order_3_72/*[0-9]
+  data_dir: ./data
+  topo_path: ./data/topo_data_Normalization.npy
+  train_count: 1292
+  valid_count: 92
+model:
+  stage1: target/residual-oriented deterministic U-Net
+  stage2: score-only conditional VE-SDE diffusion
+  ensemble_size: 16
+  lambda_fcrps: 0.0
+outputs:
+  checkpoint_dir: ./outputs/checkpoints/corrdiff
+  prediction_root: ./outputs/predictions/corrdiff
+  stage1_best_checkpoint: reg_sysbias_best_corrdiff_stage1.pth
+  diffusion_best_checkpoint: corrdiff_score_only_best_full.pth
+scripts:
+  train_stage1: scripts/train_corrdiff_stage1.py
+  train_diffusion: scripts/train_corrdiff_diffusion.py

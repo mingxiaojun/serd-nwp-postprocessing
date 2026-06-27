@@ -1,0 +1,24 @@
+experiment:
+  id: serd_v1
+  table2_name: SERD
+  purpose: Main two-stage residual diffusion framework with fCRPS distributional constraint.
+data:
+  stage2_residual_glob: ./data/stage2_residuals_serd_v1/*[0-9]
+  data_dir: ./data
+  topo_path: ./data/topo_data_Normalization.npy
+  train_count: 1292
+  valid_count: 92
+model:
+  ensemble_size: 16
+  lambda_score: 1.0
+  lambda_fcrps: 0.5
+outputs:
+  checkpoint_dir: ./outputs/checkpoints/serd_v1
+  best_checkpoint: vesde_physcond_serd_v1_stage2_fcrps_best.pth
+  prediction_root: ./outputs/predictions/serd_v1/stage2_serd
+  metric_dir: ./outputs/metrics/serd_v1
+scripts:
+  train: scripts/train_stage2_serd.py
+  infer: scripts/infer_stage2_serd.py
+  pipeline: scripts/run_serd_v1_pipeline.sh
+  evaluate: scripts/evaluate_ensemble.py

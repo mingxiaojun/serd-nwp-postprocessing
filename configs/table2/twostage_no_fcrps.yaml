@@ -1,0 +1,23 @@
+experiment:
+  id: twostage_no_fcrps
+  table2_name: Two-stage w/o fCRPS
+  purpose: Test the two-stage residual architecture without the fCRPS distributional constraint.
+data:
+  stage2_residual_glob: ./data/stage2_residuals_serd_v1/*[0-9]
+  data_dir: ./data
+  topo_path: ./data/topo_data_Normalization.npy
+  train_count: 1292
+  valid_count: 92
+model:
+  ensemble_size: 16
+  lambda_score: 1.0
+  lambda_fcrps: 0.0
+outputs:
+  checkpoint_dir: ./outputs/checkpoints/twostage_no_fcrps
+  best_checkpoint: vesde_physcond_twostage_no_fcrps_best.pth
+  prediction_root: ./outputs/predictions/twostage_no_fcrps
+  metric_dir: ./outputs/metrics/twostage_no_fcrps
+scripts:
+  train: scripts/train_twostage_no_fcrps.py
+  infer: scripts/infer_twostage_no_fcrps.py
+  evaluate: scripts/evaluate_ensemble.py

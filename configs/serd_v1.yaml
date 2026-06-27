@@ -1,0 +1,45 @@
+experiment:
+  id: serd_v1
+  description: Systematic-error-corrected residual diffusion for multivariate near-surface NWP post-processing.
+
+data:
+  data_root_glob: /path/to/CMA_gfs_time_order_3_72/*[0-9]
+  data_dir: ./data
+  topo_path: ./data/topo_data_Normalization.npy
+  train_count: 1292
+  valid_count: 92
+  height: 192
+  width: 192
+  num_surface_vars: 5
+  num_levels: 9
+  num_leads: 24
+  variables: [q2m, u10, v10, sp, t2m]
+  lead_hours: [3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45, 48, 51, 54, 57, 60, 63, 66, 69, 72]
+
+paths:
+  checkpoints: ./outputs/checkpoints/serd_v1
+  stage1_predictions: ./outputs/predictions/serd_v1/stage1_mean
+  stage2_residual_data: ./data/stage2_residuals_serd_v1
+  stage2_predictions: ./outputs/predictions/serd_v1/stage2_serd
+  metrics: ./outputs/metrics/serd_v1
+
+stage1_mean:
+  checkpoint_best: ./outputs/checkpoints/serd_v1/reg_sysbias_best_serd_v1_stage1.pth
+  checkpoint_final: ./outputs/checkpoints/serd_v1/reg_sysbias_final_serd_v1_stage1.pth
+  loss: mse
+
+stage2_serd:
+  checkpoint_best: ./outputs/checkpoints/serd_v1/vesde_physcond_serd_v1_stage2_fcrps_best.pth
+  checkpoint_final: ./outputs/checkpoints/serd_v1/vesde_physcond_serd_v1_stage2_fcrps_final.pth
+  sigma_min: 0.02
+  sigma_max: 10.0
+  edm_steps: 60
+  ensemble_size: 16
+  loss:
+    score: 1.0
+    fcrps: 0.5
+    training_members: 6
+
+ngr_baseline:
+  checkpoint_dir: ./outputs/checkpoints/serd_v1/ngr_baseline
+  ensemble_size: 16
