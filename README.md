@@ -9,9 +9,11 @@ Use a single experiment id: `serd_v1`.
 
 Unified data split:
 
-- Train: first `1292` initialization days.
-- Validation: next `92` initialization days.
-- Test: all remaining initialization days.
+- Training: 2020-01-01 to 2023-09-30
+- Validation: 2023-10-01 to 2023-12-31
+- Testing: 2024-01-01 to 2024-12-31
+
+In the released scripts, this split is implemented as 1292 training initialization days, 92 validation initialization days, and all remaining initialization days for testing.
 
 The target variables are `[q2m, u10, v10, sp, t2m]` and the lead times are 3-72 h at 3 h intervals.
 
@@ -89,6 +91,13 @@ python scripts/evaluate_ensemble.py \
   --split test \
   --out_dir ./outputs/metrics/serd_v1
 ```
+
+## Data availability
+
+The CMA-GFS reforecast data and CMA-RRA reanalysis data used in this study are not redistributed in this repository due to data access restrictions. Users should request access from the CMA Earth System Modeling and Prediction Centre (CEMC), China Meteorological Administration.
+
+This repository provides the model code, configuration files, training/inference scripts, and evaluation pipeline. Users need to prepare the input data following the same forecast-analysis pairing and preprocessing procedure described in the paper.
+
 
 ## Checkpoint Naming
 
