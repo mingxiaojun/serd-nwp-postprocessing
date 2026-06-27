@@ -36,7 +36,7 @@ def build_parser():
         description="DDP Train Regression Mean Model with Pure MSE Loss"
     )
 
-    # 鍩虹璁粌
+    # Basic training settings
     parser.add_argument("--batch_size", type=int, default=3)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--epochs", type=int, default=10)
@@ -44,7 +44,7 @@ def build_parser():
     parser.add_argument("--num_workers", type=int, default=7)
     parser.add_argument("--grad_clip", type=float, default=1.0)
 
-    # 鏁版嵁涓庝繚瀛?
+    # Data and output paths
     parser.add_argument("--data_dir", type=str, default="./data")
     parser.add_argument("--save_dir", type=str, default="./outputs/checkpoints/serd_v1")
     parser.add_argument(
@@ -60,14 +60,14 @@ def build_parser():
     parser.add_argument("--train_count", type=int, default=1292)
     parser.add_argument("--valid_count", type=int, default=92)
 
-    # 妯″瀷/鏁版嵁褰㈢姸
+    # Model and data shape settings
     parser.add_argument("--height", type=int, default=192)
     parser.add_argument("--width", type=int, default=192)
     parser.add_argument("--num_surface_vars", type=int, default=5)
     parser.add_argument("--num_levels", type=int, default=9)
     parser.add_argument("--num_classes", type=int, default=24)
 
-    # 璇勪及
+    # Evaluation settings
     parser.add_argument("--eval_every", type=int, default=1)
     parser.add_argument("--save_images", action="store_true")
     parser.add_argument("--save_every", type=int, default=1)
@@ -78,7 +78,7 @@ def build_parser():
         help="channel index used for physical-space MSE evaluation",
     )
 
-    # 鍏跺畠
+    # Other settings
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--device",
