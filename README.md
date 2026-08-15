@@ -13,7 +13,7 @@ Unified data split:
 - Validation: 2023-10-01 to 2023-12-31
 - Testing: 2024-01-01 to 2024-12-31
 
-In the released scripts, this split is implemented as 1292 training initialization days, 92 validation initialization days, and all remaining initialization days for testing.
+The scripts select these calendar intervals explicitly. Sample counts are checked after file matching/QC and never define the split.
 
 The target variables are `[q2m, u10, v10, sp, t2m]` and the lead times are 3-72 h at 3 h intervals.
 
@@ -55,7 +55,7 @@ Each Table 2 method has an independent config under `configs/table2/` and a matc
 | Two-stage w/o fCRPS | `configs/table2/twostage_no_fcrps.yaml` | `scripts/run_table2_twostage_no_fcrps.sh` |
 | SERD | `configs/table2/serd.yaml` | `scripts/run_table2_serd.sh` |
 
-All entries use the same chronological split: `1292` train days, `92` validation days, and all remaining days for test.
+All entries use the same explicit calendar split shown above.
 
 ## Recommended Pipeline
 
@@ -63,12 +63,13 @@ Install dependencies:
 
 ```bash
 pip install -r requirements.txt
+pip install -e .
 ```
 
 Run the recommended SERD pipeline:
 
 ```bash
-export DATA_ROOT_GLOB="/path/to/CMA_gfs_time_order_3_72/*[0-9]"
+export DATA_ROOT_GLOB="/online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]"
 export DATA_DIR="./data"
 export TOPO_PATH="./data/topo_data_Normalization.npy"
 bash scripts/run_serd_v1_pipeline.sh
@@ -80,14 +81,22 @@ The pipeline performs:
 2. Infer stage-1 corrections for all splits.
 3. Build stage-2 residual-error data.
 4. Train the stage-2 VE-SDE residual diffusion model with score loss + fCRPS and select best checkpoint on validation split.
-5. Generate test-split residual-error ensembles.
+5. Generate 16-member final forecast ensembles in physical units.
+
+Because the original exclusion list is unavailable, regenerate and verify it before training:
+
+```bash
+python scripts/audit_paper_dataset.py --strict
+```
+
+This writes included/excluded CSV manifests and checks the manuscript counts `32560/2208/8685`.
 
 Evaluate test ensembles:
 
 ```bash
 python scripts/evaluate_ensemble.py \
   --sample_root ./outputs/predictions/serd_v1/stage2_serd \
-  --target_root_glob "./data/stage2_residuals_serd_v1/*[0-9]" \
+  --target_root_glob "/online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]" \
   --split test \
   --out_dir ./outputs/metrics/serd_v1
 ```
@@ -111,4 +120,11 @@ Recommended names:
 
 ## Baseline
 
-The NGR baseline scripts in `scripts/train_ngr_baseline.py` and `scripts/infer_ngr_baseline.py` use the same `1292/92/test` split.
+The NGR baseline uses the same explicit calendar split and the same final physical-field evaluator.
+
+## Paper-locked metric contract
+
+- Table 3 and Figures 4--8 use ordinary empirical ensemble CRPS, with the pairwise term divided by `2 K^2`; fair CRPS is used only as the neural training regularizer.
+- Ensemble spread uses sample standard deviation (`ddof=1`).
+- Coverage error is `abs(actual - nominal)`.
+- Rank histograms have 17 bins for the 16-member ensembles.

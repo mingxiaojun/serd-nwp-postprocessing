@@ -1,187 +1,101 @@
-﻿import numpy as np
-import joblib
-import os
-import glob
+"""Build physical SERD residual targets and a train-only residual scaler."""
+from __future__ import annotations
+
 import argparse
+import glob
 from datetime import datetime
+from pathlib import Path
+
+import joblib
+import numpy as np
+
+from serd.paper.spec import (LEAD_HOURS, SURFACE_CHANNEL_INDICES, file_candidates,
+                             find_existing, select_date_split, validate_forecast_shape)
 
 
-
-class DataNormalizer:
-    def __init__(self, stats=None, eps=1e-6):
-        """
-        stats: dict, 褰㈠ {"mean": np.ndarray(C,), "std": np.ndarray(C,)}
-        eps: 闃叉 std 涓?0
-        """
-        if stats is None:
-            self.stats = {"mean": None, "std": None}
-        else:
-            self.stats = stats
-        self.eps = eps
-
-    def fit(self, data):
-        """
-        鏍规嵁璁粌鏁版嵁鎷熷悎 z-score 鍙傛暟
-        data: numpy array, shape = (N, C, H, W)
-        """
-        if data.ndim != 4:
-            raise ValueError(f"data 搴斾负 4 缁?(N, C, H, W)锛屽綋鍓?shape={data.shape}")
-
-        # 姣忎釜閫氶亾鍒嗗埆缁熻 mean/std
-        mean = data.mean(axis=(0, 2, 3)).astype(np.float32)   # (C,)
-        std = data.std(axis=(0, 2, 3)).astype(np.float32)     # (C,)
-        std = np.maximum(std, self.eps)
-
-        self.stats = {
-            "mean": mean,
-            "std": std
-        }
-
-    def transform(self, data):
-        """
-        鍋?z-score 鏍囧噯鍖?
-        鏀寔锛?
-            data shape = (N, C, H, W)
-            data shape = (C, H, W)
-        """
-        if self.stats["mean"] is None or self.stats["std"] is None:
-            raise RuntimeError("璇峰厛璋冪敤 fit() 鎴?load()")
-
-        mean = self.stats["mean"]
-        std = self.stats["std"]
-
-        if data.ndim == 4:
-            # (N, C, H, W)
-            data_out = (data.astype(np.float32) - mean[None, :, None, None]) / std[None, :, None, None]
-        elif data.ndim == 3:
-            # (C, H, W)
-            data_out = (data.astype(np.float32) - mean[:, None, None]) / std[:, None, None]
-        else:
-            raise ValueError(f"data 搴斾负 3 缁存垨 4 缁达紝褰撳墠 shape={data.shape}")
-
-        data_out = np.nan_to_num(data_out, nan=0.0, posinf=0.0, neginf=0.0)
-        return data_out.astype(np.float32)
-
-    def inverse_transform(self, data):
-        """
-        鎶?z-score 鏍囧噯鍖栧悗鐨勬暟鎹繕鍘熷埌鍘熷鐗╃悊閲?
-        鏀寔锛?
-            data shape = (N, C, H, W)
-            data shape = (C, H, W)
-        """
-        if self.stats["mean"] is None or self.stats["std"] is None:
-            raise RuntimeError("璇峰厛璋冪敤 fit() 鎴?load()")
-
-        mean = self.stats["mean"]
-        std = self.stats["std"]
-
-        if data.ndim == 4:
-            data_out = data.astype(np.float32) * std[None, :, None, None] + mean[None, :, None, None]
-        elif data.ndim == 3:
-            data_out = data.astype(np.float32) * std[:, None, None] + mean[:, None, None]
-        else:
-            raise ValueError(f"data 搴斾负 3 缁存垨 4 缁达紝褰撳墠 shape={data.shape}")
-
-        return data_out.astype(np.float32)
-
-    def save(self, path):
-        """
-        淇濆瓨 z-score 鍙傛暟
-        """
-        joblib.dump(self.stats, path)
-
-    @classmethod
-    def load(cls, path, eps=1e-6):
-        """
-        鍔犺浇 z-score 鍙傛暟
-        """
-        stats = joblib.load(path)
-        return cls(stats=stats, eps=eps)
-    
-
-def build_parser():
-    parser = argparse.ArgumentParser(
-        description="Build SERD stage-2 residual data from stage-1 deterministic corrections."
-    )
-    parser.add_argument("--data_root_glob", type=str, required=True)
-    parser.add_argument("--stage1_prediction_root", type=str, required=True)
-    parser.add_argument("--output_root", type=str, default="./data/stage2_residuals_serd_v1")
-    parser.add_argument("--analysis_scaler_path", type=str, default="./data/scalers_ana_zscore_two_step_unet_train.pkl")
-    parser.add_argument("--train_count", type=int, default=1292)
-    parser.add_argument("--valid_count", type=int, default=92)
-    parser.add_argument(
-        "--split",
-        type=str,
-        default="all",
-        choices=["train", "valid", "test", "all"],
-        help="Subset of initialization days to convert using the unified SERD split.",
-    )
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--data_root_glob", default="/online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]")
+    parser.add_argument("--stage1_prediction_root", required=True)
+    parser.add_argument("--output_root", default="./data/stage2_residuals_serd_v1")
+    parser.add_argument("--total_error_scaler_path", default="./data/scalers_err_zscore_train.pkl")
+    parser.add_argument("--residual_scaler_path", default="./data/scalers_stage2_residual_zscore_train.pkl")
     parser.add_argument("--height", type=int, default=192)
     parser.add_argument("--width", type=int, default=192)
     return parser
 
 
-def select_files(all_paths, split, train_count, valid_count):
-    train_end = train_count
-    valid_end = train_count + valid_count
-    if split == "train":
-        return all_paths[:train_end]
-    if split == "valid":
-        return all_paths[train_end:valid_end]
-    if split == "test":
-        return all_paths[valid_end:]
-    return all_paths
+def inverse_zscore(value: np.ndarray, scaler_path: str) -> np.ndarray:
+    stats = joblib.load(scaler_path)
+    mean = np.asarray(stats["mean"], dtype=np.float32)[:, None, None]
+    std = np.asarray(stats["std"], dtype=np.float32)[:, None, None]
+    return value.astype(np.float32) * std + mean
 
 
-def main():
+class ChannelMoments:
+    def __init__(self, channels: int = 5):
+        self.count = 0
+        self.total = np.zeros(channels, dtype=np.float64)
+        self.total_sq = np.zeros(channels, dtype=np.float64)
+
+    def update(self, value: np.ndarray) -> None:
+        flat = np.asarray(value, dtype=np.float64).reshape(value.shape[0], -1)
+        self.count += flat.shape[1]
+        self.total += flat.sum(axis=1)
+        self.total_sq += np.square(flat).sum(axis=1)
+
+    def stats(self) -> dict[str, np.ndarray]:
+        if self.count == 0:
+            raise RuntimeError("No training residuals found; cannot fit the stage-2 scaler")
+        mean = self.total / self.count
+        variance = np.maximum(self.total_sq / self.count - mean * mean, 1e-12)
+        return {"mean": mean.astype(np.float32), "std": np.sqrt(variance).astype(np.float32)}
+
+
+def main() -> None:
     args = build_parser().parse_args()
-    all_data_path = sorted(glob.glob(args.data_root_glob))
-    selected_paths = select_files(all_data_path, args.split, args.train_count, args.valid_count)
-    if not selected_paths:
-        raise RuntimeError(f"No files selected for split={args.split}")
+    paper_days = select_date_split(sorted(glob.glob(args.data_root_glob)), "all")
+    if not paper_days:
+        raise RuntimeError("No day directories in the manuscript period were found")
+    output_root = Path(args.output_root)
+    output_root.mkdir(parents=True, exist_ok=True)
+    moments = ChannelMoments()
+    saved = skipped = 0
 
-    normalizer_err = DataNormalizer.load(args.analysis_scaler_path)
-    os.makedirs(args.output_root, exist_ok=True)
-
-    saved = 0
-    skipped = 0
-    for path in selected_paths:
-        time0 = os.path.basename(path.rstrip("/\\"))
-        time = datetime.strptime(str(time0), "%Y%m%d").strftime("%Y_%m_%d")
-        base_time = datetime.strptime(time0, "%Y%m%d").replace(hour=9).strftime("%Y-%m-%d-%H")
-
-        stage1_day_dir = os.path.join(args.stage1_prediction_root, base_time)
-        output_day_dir = os.path.join(args.output_root, time0)
-        os.makedirs(output_day_dir, exist_ok=True)
-
-        for lead_hour in range(3, 73, 3):
-            analysis_path = glob.glob(os.path.join(path, f"{time}__{lead_hour}_analysis.npy"))
-            raw_fc_path = glob.glob(os.path.join(path, f"{time}_{lead_hour}.npy"))
-            stage1_path = glob.glob(os.path.join(stage1_day_dir, f"{base_time}_{lead_hour:02d}.npy"))
-            if len(analysis_path) != 1 or len(raw_fc_path) != 1 or len(stage1_path) != 1:
+    for day_text in paper_days:
+        day_dir = Path(day_text)
+        day = datetime.strptime(day_dir.name, "%Y%m%d")
+        date_token = day.strftime("%Y_%m_%d")
+        init_token = day.replace(hour=9).strftime("%Y-%m-%d-%H")
+        prediction_day = Path(args.stage1_prediction_root) / init_token
+        output_day = output_root / day_dir.name
+        output_day.mkdir(parents=True, exist_ok=True)
+        for lead in LEAD_HOURS:
+            forecast_path = find_existing(file_candidates(day_dir, date_token, lead))
+            error_path = find_existing(file_candidates(day_dir, date_token, lead, "_err"))
+            prediction_path = prediction_day / f"{init_token}_{lead:02d}.npy"
+            if forecast_path is None or error_path is None or not prediction_path.is_file():
                 skipped += 1
                 continue
+            forecast = np.load(forecast_path).astype(np.float32)
+            validate_forecast_shape(tuple(forecast.shape))
+            total_error = np.load(error_path).astype(np.float32)[:, :args.height, :args.width]
+            systematic_error = inverse_zscore(np.load(prediction_path), args.total_error_scaler_path)
+            systematic_error = systematic_error[:, :args.height, :args.width]
+            residual = total_error - systematic_error
+            corrected = forecast.copy()
+            corrected[list(SURFACE_CHANNEL_INDICES), :args.height, :args.width] += systematic_error
+            np.save(output_day / f"{date_token}_{lead:02d}.npy", corrected)
+            np.save(output_day / f"{date_token}_{lead:02d}_err.npy", residual.astype(np.float32))
+            if day.date().isoformat() <= "2023-09-30":
+                moments.update(residual)
+            saved += 1
 
-            analysis = np.load(analysis_path[0])[:, :args.height, :args.width]
-            raw_forecast = np.load(raw_fc_path[0])[:, :args.height, :args.width]
-            stage1_error = normalizer_err.inverse_transform(np.load(stage1_path[0]))
-
-            if raw_forecast.shape[0] != 45:
-                raise ValueError(f"Expected raw forecast to have 45 channels, got {raw_forecast.shape}: {raw_fc_path[0]}")
-            corrected_field = raw_forecast.copy()
-            corrected_field[::9, :, :] = stage1_error
-            residual_error = analysis - stage1_error
-
-            np.save(os.path.join(output_day_dir, f"{time}_{lead_hour}.npy"), corrected_field)
-            np.save(os.path.join(output_day_dir, f"{time}_{lead_hour}_err.npy"), residual_error)
-            saved += 2
-
-        print(base_time)
-
-    print(f"Finished split={args.split}: saved_files={saved}, skipped_leads={skipped}, output_root={args.output_root}")
+    Path(args.residual_scaler_path).parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(moments.stats(), args.residual_scaler_path)
+    print(f"saved_samples={saved} skipped_samples={skipped}")
+    print(f"train-only residual scaler: {args.residual_scaler_path}")
 
 
 if __name__ == "__main__":
     main()
-
-

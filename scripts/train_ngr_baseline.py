@@ -74,9 +74,10 @@ from scipy.stats import norm
 import torch
 from torch.utils.data import DataLoader
 
-from serd.data.forecast_analysis_dataset import ForecastDataset
+from serd.data.forecast_error_dataset import ForecastDataset
 from serd.data.normalizer_forecast import DataNormalizer as DataNormalizer_fc
-from serd.data.normalizer_analysis import DataNormalizer as DataNormalizer_err
+from serd.data.normalizer_error import DataNormalizer as DataNormalizer_err
+from serd.paper.spec import select_date_split
 
 
 # =========================================================
@@ -93,7 +94,7 @@ def build_parser():
     parser.add_argument(
         "--data_root_glob",
         type=str,
-        default="/path/to/CMA_gfs_time_order_3_72/*[0-9]",
+        default="/online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]",
     )
     parser.add_argument(
         "--topo_path",
@@ -102,8 +103,6 @@ def build_parser():
     )
 
     # Data split, consistent with your paper
-    parser.add_argument("--train_count", type=int, default=1292)
-    parser.add_argument("--valid_count", type=int, default=92)
     parser.add_argument("--use_validation", action="store_true")
 
     # Shape
@@ -245,7 +244,7 @@ def load_stats(args):
     )
     error_scaler_path = os.path.join(
         args.data_dir,
-        "scalers_ana_zscore_two_step_unet_train.pkl",
+        "scalers_err_zscore_two_step_unet_train.pkl",
     )
 
     if not os.path.exists(forecast_scaler_path):
@@ -831,17 +830,9 @@ def main():
     np.random.seed(args.seed)
 
     all_filepaths = sorted(glob.glob(args.data_root_glob))
-    if len(all_filepaths) <= args.train_count + args.valid_count:
-        raise RuntimeError(
-            f"Not enough files: {len(all_filepaths)} for train_count={args.train_count}, "
-            f"valid_count={args.valid_count}"
-        )
-
-    train_files = all_filepaths[: args.train_count]
-    valid_files = all_filepaths[
-        args.train_count : args.train_count + args.valid_count
-    ]
-    test_files = all_filepaths[args.train_count + args.valid_count :]
+    train_files = select_date_split(all_filepaths, "train")
+    valid_files = select_date_split(all_filepaths, "valid")
+    test_files = select_date_split(all_filepaths, "test")
 
     stats = load_stats(args)
 
@@ -965,5 +956,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

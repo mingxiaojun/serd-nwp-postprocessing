@@ -18,18 +18,19 @@ import torch.nn.functional as F
 from torch import amp
 from torch.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from torch_ema import ExponentialMovingAverage
 from tqdm.auto import tqdm
 
-from serd.data.forecast_error_dataset import ForecastDataset
+from serd.data.forecast_analysis_dataset import ForecastDataset
 from serd.data.normalizer_forecast import DataNormalizer as DataNormalizer_fc
-from serd.data.normalizer_error import DataNormalizer as DataNormalizer_err
+from serd.data.normalizer_analysis import DataNormalizer as DataNormalizer_err
 
 # 杩欓噷淇濇寔鍜屼綘鐜板湪鐨勬ā鍨嬫ā鍧椾竴鑷?
 from serd.models import forecast_mean_unet
+from serd.paper.spec import select_date_split
 
 
 # =========================================================
@@ -41,7 +42,7 @@ parser = argparse.ArgumentParser(
 
 # 鍩虹璁粌
 parser.add_argument("--batch_size", type=int, default=3)
-parser.add_argument("--lr", type=float, default=1e-4)
+parser.add_argument("--lr", type=float, default=2e-4)
 parser.add_argument("--epochs", type=int, default=10)
 parser.add_argument("--weight_decay", type=float, default=5e-4)
 parser.add_argument("--num_workers", type=int, default=7)
@@ -53,21 +54,19 @@ parser.add_argument("--save_dir", type=str, default="./outputs/checkpoints/corrd
 parser.add_argument(
     "--data_root_glob",
     type=str,
-    default="/path/to/CMA_gfs_time_order_3_72/*[0-9]",
+    default="/online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]",
 )
 parser.add_argument(
     "--topo_path",
     type=str,
     default="./data/topo_data_Normalization.npy",
 )
-parser.add_argument("--train_count", type=int, default=1292)
-parser.add_argument("--valid_count", type=int, default=92)
 
 # 妯″瀷/鏁版嵁褰㈢姸
 parser.add_argument("--height", type=int, default=192)
 parser.add_argument("--width", type=int, default=192)
 parser.add_argument("--num_surface_vars", type=int, default=5)
-parser.add_argument("--num_levels", type=int, default=9)
+parser.add_argument("--num_levels", type=int, default=8)
 parser.add_argument("--num_classes", type=int, default=24)
 
 # 璇勪及
@@ -346,7 +345,7 @@ def evaluate_regression(model, device, test_loader, topo_base, args, current_epo
         n_low_points = 0
 
         channel_idx = -1
-        scalers = joblib.load(os.path.join(args.data_dir, "scalers_err_zscore_two_step_unet_train.pkl"))
+        scalers = joblib.load(os.path.join(args.data_dir, "scalers_ana_zscore_two_step_unet_train.pkl"))
         mean_c = scalers["mean"][channel_idx]
         std_c = scalers["std"][channel_idx]
 
@@ -363,12 +362,10 @@ def evaluate_regression(model, device, test_loader, topo_base, args, current_epo
             B = fc.shape[0]
 
             target_err = err[:, :, :args.height, :args.width].to(device, non_blocking=True)  # (B,5,H,W)
-            forecast_2d = fc[:, ::args.num_levels, :args.height, :args.width].to(device, non_blocking=True)  # (B,5,H,W)
-
             forecast_raw = fc[:, :, :args.height, :args.width].to(device, non_blocking=True)
-            forecast_3d = forecast_raw.reshape(
-                B, args.num_surface_vars, args.num_levels, args.height, args.width
-            )
+            grouped = forecast_raw.reshape(B, args.num_surface_vars, args.num_levels + 1, args.height, args.width)
+            forecast_2d = grouped[:, :, 0]
+            forecast_3d = grouped[:, :, 1:]
 
             topo_data = topo_base.expand(B, -1, -1, -1).to(dtype=target_err.dtype)
 
@@ -493,19 +490,17 @@ def main():
         os.path.join(args.data_dir, "scalers_forecast_zscore_two_step_unet_train.pkl")
     )
     normalizer_err = DataNormalizer_err.load(
-        os.path.join(args.data_dir, "scalers_err_zscore_two_step_unet_train.pkl")
+        os.path.join(args.data_dir, "scalers_ana_zscore_two_step_unet_train.pkl")
     )
 
     if is_main_process():
         print("Total files:", len(all_filepaths))
 
-    assert len(all_filepaths) > args.train_count + args.valid_count, (
-        f"Total files={len(all_filepaths)} must be > train_count + valid_count"
-    )
+    assert all_filepaths, f"No files matched {args.data_root_glob}"
 
-    train_files = all_filepaths[:args.train_count]
-    valid_files = all_filepaths[args.train_count: args.train_count + args.valid_count]
-    test_files = all_filepaths[args.train_count + args.valid_count:]
+    train_files = select_date_split(all_filepaths, "train")
+    valid_files = select_date_split(all_filepaths, "valid")
+    test_files = select_date_split(all_filepaths, "test")
 
     train_dataset = ForecastDataset(train_files, normalizer_forecast, normalizer_err)
     test_dataset = ForecastDataset(valid_files, normalizer_forecast, normalizer_err)
@@ -571,7 +566,7 @@ def main():
     in_channels_2d = topo_base.shape[1] + out_channels
 
     fixed_levels = torch.tensor(
-        [1013.25, 925.0, 850.0, 700.0, 500.0, 300.0, 200.0, 150.0, 100.0],
+        [925.0, 850.0, 700.0, 500.0, 300.0, 200.0, 150.0, 100.0],
         dtype=torch.float32,
     )
 
@@ -621,11 +616,7 @@ def main():
         eps=1e-8,
         weight_decay=args.weight_decay,
     )
-    scheduler = CosineAnnealingLR(
-        optimizer,
-        T_max=max(1, args.epochs),
-        eta_min=max(1e-6, args.lr * 0.1),
-    )
+    scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=5, min_lr=1e-6)
 
     ema_params = model.module.parameters() if isinstance(model, DDP) else model.parameters()
     ema = ExponentialMovingAverage(ema_params, decay=args.ema_decay)
@@ -672,12 +663,10 @@ def main():
             B = fc.shape[0]
 
             target_err = err[:, :, :args.height, :args.width].to(device, non_blocking=True)  # (B,5,H,W)
-            forecast_2d = fc[:, ::args.num_levels, :args.height, :args.width].to(device, non_blocking=True)  # (B,5,H,W)
-
             forecast_raw = fc[:, :, :args.height, :args.width].to(device, non_blocking=True)
-            forecast_3d = forecast_raw.reshape(
-                B, args.num_surface_vars, args.num_levels, args.height, args.width
-            )  # (B,5,9,H,W)
+            grouped = forecast_raw.reshape(B, args.num_surface_vars, args.num_levels + 1, args.height, args.width)
+            forecast_2d = grouped[:, :, 0]
+            forecast_3d = grouped[:, :, 1:]
 
             topo_data = topo_base.expand(B, -1, -1, -1).to(dtype=target_err.dtype)
 
@@ -698,48 +687,9 @@ def main():
                     init_time=init_time_tensor,
                 )  # (B,5,H,W)
 
-                residual = target_err - pred_err
-
-                # 1) 寮辩偣瀵圭偣绾︽潫锛氬彧璐熻矗绋宠缁冿紝涓嶄綔涓轰富瀵?
-                loss_point, _ = weighted_huber_channelwise(
-                    pred_err, target_err, channel_weights, beta=args.huber_beta
-                )
-
-                # 2) batch 鍐呯浉鍚?lead 鐨勬畫宸潯浠跺潎鍊?-> 0
-                loss_cond, _ = conditional_mean_residual_loss_channelwise(
-                    residual,
-                    label,
-                    channel_weights,
-                    min_group_size=args.cond_min_group,
-                )
-
-                # 3) 娈嬪樊鍖哄煙鍧囧€?-> 0
-                loss_reg, _ = regional_residual_zero_mean_loss_channelwise(
-                    residual,
-                    channel_weights,
-                    block=args.reg_block,
-                )
-
-                # 4) 娈嬪樊浣庨 -> 0
-                loss_low, _ = lowfreq_residual_zero_mean_loss_channelwise(
-                    residual,
-                    channel_weights,
-                    kernel_size=args.lowpass_kernel,
-                )
-
-                # 5) 棰勬祴绯荤粺璇樊鍦哄仛寮?TV
-                loss_tv, _ = pred_tv_loss_channelwise(
-                    pred_err,
-                    channel_weights,
-                )
-
-                loss = (
-                    args.lambda_point * loss_point
-                    + args.lambda_cond * loss_cond
-                    + args.lambda_reg * loss_reg
-                    + args.lambda_low * loss_low
-                    + args.lambda_tv * loss_tv
-                )
+                loss = F.mse_loss(pred_err, target_err)
+                loss_point = loss
+                loss_cond = loss_reg = loss_low = loss_tv = loss.detach().new_zeros(())
 
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
@@ -781,8 +731,6 @@ def main():
         avg_train_loss_low = (loss_sum_t[4] / denom).item()
         avg_train_loss_tv = (loss_sum_t[5] / denom).item()
 
-        scheduler.step()
-
         if is_main_process():
             dt = time.time() - start_time
             print(
@@ -802,8 +750,9 @@ def main():
             with ema.average_parameters():
                 eval_model = model.module if isinstance(model, DDP) else model
                 mse_phys, mse_norm, low_mse_norm = evaluate_regression(
-                    eval_model, device, test_loader, topo_base, args, current_epoch=epoch + 1
+                    eval_model, device, valid_loader, topo_base, args, current_epoch=epoch + 1
                 )
+            scheduler.step(mse_norm)
 
             if is_main_process():
                 print(
@@ -853,4 +802,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

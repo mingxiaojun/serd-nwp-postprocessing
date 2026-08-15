@@ -11,11 +11,15 @@ SERD follows the paper design:
 
 The unified split is:
 
-- Train: first `1292` initialization days.
-- Validation: next `92` initialization days.
-- Test: all remaining initialization days.
+- Train: 2020-01-01 through 2023-09-30.
+- Validation: 2023-10-01 through 2023-12-31.
+- Test: 2024-01-01 through 2024-12-31.
 
-All training, inference, NGR baseline, and evaluation scripts should use this same split.
+All training, inference, baselines, and evaluation scripts select this split by date. The reported 32,560/2,208/8,685 sample counts are post-QC checks, not slicing indices.
+
+The 45 forecast channels contain five nine-channel blocks: one near-surface field followed by its eight pressure-level fields at 925, 850, 700, 500, 300, 200, 150, and 100 hPa. The model therefore receives five surface fields plus a `5 x 8` upper-air tensor.
+
+Stage 1 uses raw physical total error (`analysis - forecast`) and the five loss weights `0.10/0.50/0.20/0.15/0.03`. Stage 2 uses `total error - stage-1 error` and fits a separate scaler from training residuals only.
 
 ## Table 2 Mapping
 
