@@ -776,8 +776,6 @@ class ForecastErrorUNet2D3D(nn.Module):
 
         if self.use_init_time and (init_time is not None) and (self.init_time_mlp is not None):
             init_feat = self.init_time_ln(self.init_time_mlp(init_time.to(dtype=torch.float32, device=device)))
-            phys_vec = self.gamma_init * init_feat if phys_vec is not None else self.gamma_init * init_feat
-            # 上面这一句故意写成与原始逻辑等价但避免漏看；继续统一写法：
             phys_vec = self.gamma_init * init_feat if phys_vec is None else (phys_vec + self.gamma_init * init_feat)
 
         if phys_vec is not None:

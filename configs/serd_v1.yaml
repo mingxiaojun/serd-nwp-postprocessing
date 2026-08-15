@@ -3,15 +3,18 @@ experiment:
   description: Systematic-error-corrected residual diffusion for multivariate near-surface NWP post-processing.
 
 data:
-  data_root_glob: /path/to/CMA_gfs_time_order_3_72/*[0-9]
+  data_root_glob: /online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]
   data_dir: ./data
   topo_path: ./data/topo_data_Normalization.npy
-  train_count: 1292
-  valid_count: 92
+  train_dates: [2020-01-01, 2023-09-30]
+  valid_dates: [2023-10-01, 2023-12-31]
+  test_dates: [2024-01-01, 2024-12-31]
+  expected_post_qc_samples: {train: 32560, valid: 2208, test: 8685}
   height: 192
   width: 192
   num_surface_vars: 5
-  num_levels: 9
+  num_pressure_levels: 8
+  forecast_channel_order: [q2m, q925, q850, q700, q500, q300, q200, q150, q100, u10, u925, u850, u700, u500, u300, u200, u150, u100, v10, v925, v850, v700, v500, v300, v200, v150, v100, sp, z925, z850, z700, z500, z300, z200, z150, z100, t2m, t925, t850, t700, t500, t300, t200, t150, t100]
   num_leads: 24
   variables: [q2m, u10, v10, sp, t2m]
   lead_hours: [3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45, 48, 51, 54, 57, 60, 63, 66, 69, 72]
@@ -26,19 +29,39 @@ paths:
 stage1_mean:
   checkpoint_best: ./outputs/checkpoints/serd_v1/reg_sysbias_best_serd_v1_stage1.pth
   checkpoint_final: ./outputs/checkpoints/serd_v1/reg_sysbias_final_serd_v1_stage1.pth
-  loss: mse
+  target: physical_total_error_analysis_minus_forecast
+  learning_rate: 0.0002
+  scheduler: {name: ReduceLROnPlateau, mode: min, factor: 0.5, patience: 5, min_lr: 0.000001}
+  loss:
+    point: 0.10
+    conditional: 0.50
+    regional: 0.20
+    low_frequency: 0.15
+    total_variation: 0.03
 
 stage2_serd:
   checkpoint_best: ./outputs/checkpoints/serd_v1/vesde_physcond_serd_v1_stage2_fcrps_best.pth
   checkpoint_final: ./outputs/checkpoints/serd_v1/vesde_physcond_serd_v1_stage2_fcrps_final.pth
-  sigma_min: 0.02
+  target: physical_residual_total_error_minus_stage1_error
+  scaler: ./data/scalers_stage2_residual_zscore_train.pkl
+  sigma_min: 0.001
   sigma_max: 10.0
   edm_steps: 60
   ensemble_size: 16
   loss:
     score: 1.0
     fcrps: 0.5
-    training_members: 6
+    training_members: 8
+    antithetic_noise: true
+  learning_rate: 0.0002
+  scheduler: {name: ReduceLROnPlateau, mode: min, factor: 0.5, patience: 5, min_lr: 0.000001}
+
+evaluation:
+  crps: empirical
+  crps_pair_denominator: 2K2
+  spread_ddof: 1
+  coverage_error: absolute
+  physical_units: true
 
 ngr_baseline:
   checkpoint_dir: ./outputs/checkpoints/serd_v1/ngr_baseline

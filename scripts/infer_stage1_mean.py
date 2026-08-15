@@ -20,10 +20,13 @@ from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm
 from datetime import datetime
 
-from serd.data.forecast_analysis_dataset import ForecastDataset
+from serd.data.forecast_analysis_dataset import ForecastDataset as AnalysisDataset
+from serd.data.forecast_error_dataset import ForecastDataset as ErrorDataset
 from serd.models import forecast_mean_unet
 from serd.data.normalizer_forecast import DataNormalizer as DataNormalizer_fc
-from serd.data.normalizer_analysis import DataNormalizer as DataNormalizer_err
+from serd.data.normalizer_analysis import DataNormalizer as AnalysisNormalizer
+from serd.data.normalizer_error import DataNormalizer as ErrorNormalizer
+from serd.paper.spec import select_date_split
 
 
 # ---------------------------
@@ -35,7 +38,9 @@ parser.add_argument("--batch_size", type=int, default=3)
 parser.add_argument("--num_workers", type=int, default=7)
 
 parser.add_argument("--data_dir", type=str, default="./data")
-parser.add_argument("--data_root_glob", type=str, default="/path/to/CMA_gfs_time_order_3_72/*[0-9]")
+parser.add_argument("--data_root_glob", type=str, default="/online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]")
+parser.add_argument("--target", choices=["error", "analysis"], default="error")
+parser.add_argument("--target_scaler_path", default=None)
 parser.add_argument("--topo_path", type=str, default="./data/topo_data_Normalization.npy")
 
 # 妯″瀷鏉冮噸
@@ -50,8 +55,6 @@ parser.add_argument(
 parser.add_argument("--output_root", type=str,
                     default="./outputs/predictions/serd_v1/stage1_mean")
 
-parser.add_argument("--train_count", type=int, default=1292)
-parser.add_argument("--valid_count", type=int, default=92)
 parser.add_argument(
     "--split",
     type=str,
@@ -214,11 +217,12 @@ def run_inference(model, loader, topo_base, device, output_root):
         B = fc.shape[0]
 
         # 2D 棰勬姤鍙橀噺
-        forecast_2d = fc[:, ::9, :192, :192].to(device, non_blocking=True)   # (B,5,H,W)
+        grouped = fc[:, :, :192, :192].reshape(B, 5, 9, 192, 192)
+        forecast_2d = grouped[:, :, 0].to(device, non_blocking=True)
 
         # 3D 棰勬姤鍙橀噺
         forecast_raw = fc[:, :, :192, :192].to(device, non_blocking=True)    # (B,45,H,W) or consistent with your dataset
-        forecast_3d = forecast_raw.reshape(B, 5, 9, 192, 192)
+        forecast_3d = grouped[:, :, 1:].to(device, non_blocking=True)
 
         topo_data = topo_base.expand(B, -1, -1, -1).to(dtype=forecast_2d.dtype)
 
@@ -270,26 +274,19 @@ def main():
     normalizer_forecast = DataNormalizer_fc.load(
         os.path.join(args.data_dir, "scalers_forecast_zscore_two_step_unet_train.pkl")
     )
-    normalizer_err = DataNormalizer_err.load(
-        os.path.join(args.data_dir, "scalers_ana_zscore_two_step_unet_train.pkl")
-    )
+    default_scaler = "scalers_err_zscore_two_step_unet_train.pkl" if args.target == "error" else "scalers_ana_zscore_two_step_unet_train.pkl"
+    scaler_path = args.target_scaler_path or os.path.join(args.data_dir, default_scaler)
+    normalizer_class = ErrorNormalizer if args.target == "error" else AnalysisNormalizer
+    normalizer_err = normalizer_class.load(scaler_path)
 
-    train_end = args.train_count
-    valid_end = args.train_count + args.valid_count
-    if args.split == "train":
-        infer_files = all_filepaths[:train_end]
-    elif args.split == "valid":
-        infer_files = all_filepaths[train_end:valid_end]
-    elif args.split == "test":
-        infer_files = all_filepaths[valid_end:]
-    else:
-        infer_files = all_filepaths
+    infer_files = select_date_split(all_filepaths, args.split)
 
     if is_main_process():
         print("Total files:", len(all_filepaths))
         print("Inference files:", len(infer_files))
 
-    infer_dataset = ForecastDataset(infer_files, normalizer_forecast, normalizer_err)
+    dataset_class = ErrorDataset if args.target == "error" else AnalysisDataset
+    infer_dataset = dataset_class(infer_files, normalizer_forecast, normalizer_err)
 
     if dist.is_available() and dist.is_initialized():
         infer_sampler = DistributedSampler(
@@ -334,7 +331,7 @@ def main():
     in_channels_2d = topo_base.shape[1] + out_channels
 
     fixed_levels = torch.tensor(
-        [1013.25, 925.0, 850.0, 700.0, 500.0, 300.0, 200.0, 150.0, 100.0],
+        [925.0, 850.0, 700.0, 500.0, 300.0, 200.0, 150.0, 100.0],
         dtype=torch.float32
     )
 
@@ -410,5 +407,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

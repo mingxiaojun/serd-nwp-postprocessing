@@ -6,12 +6,19 @@ data:
   stage2_residual_glob: ./data/stage2_residuals_serd_v1/*[0-9]
   data_dir: ./data
   topo_path: ./data/topo_data_Normalization.npy
-  train_count: 1292
-  valid_count: 92
+  train_dates: [2020-01-01, 2023-09-30]
+  valid_dates: [2023-10-01, 2023-12-31]
+  test_dates: [2024-01-01, 2024-12-31]
 model:
   ensemble_size: 16
   lambda_score: 1.0
   lambda_fcrps: 0.5
+  residual_scaler: ./data/scalers_stage2_residual_zscore_train.pkl
+  training_members: 8
+  antithetic_noise: true
+  learning_rate: 0.0002
+  sigma_min: 0.001
+  sigma_max: 10.0
 outputs:
   checkpoint_dir: ./outputs/checkpoints/serd_v1
   best_checkpoint: vesde_physcond_serd_v1_stage2_fcrps_best.pth

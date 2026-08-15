@@ -28,16 +28,17 @@ import torch.distributed as dist
 from torch import amp
 from torch.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from torch_ema import ExponentialMovingAverage
 from tqdm.auto import tqdm
 
-from serd.data.forecast_analysis_dataset import ForecastDataset
+from serd.data.forecast_error_dataset import ForecastDataset
 from serd.data.normalizer_forecast import DataNormalizer as DataNormalizer_fc
-from serd.data.normalizer_analysis import DataNormalizer as DataNormalizer_err
+from serd.data.normalizer_error import DataNormalizer as DataNormalizer_err
 from serd.models import physcond_error_diffusion
+from serd.paper.spec import select_date_split
 
 
 torch.set_float32_matmul_precision("high")
@@ -65,7 +66,7 @@ def build_parser():
     parser.add_argument(
         "--data_root_glob",
         type=str,
-        default="/path/to/CMA_gfs_time_order_3_72/*[0-9]",
+        default="./data/corrdiff_residuals/*[0-9]",
     )
     parser.add_argument(
         "--topo_path",
@@ -80,19 +81,17 @@ def build_parser():
     parser.add_argument(
         "--err_scaler_path",
         type=str,
-        default="./data/scalers_ana_zscore_two_step_unet_train.pkl",
+        default="./data/scalers_corrdiff_residual_zscore_train.pkl",
     )
-    parser.add_argument("--train_count", type=int, default=1292)
-    parser.add_argument("--valid_count", type=int, default=92)
 
     # 妯″瀷 / 鏁版嵁褰㈢姸锛堟部鐢ㄧ涓€涓剼鏈級
     parser.add_argument("--height", type=int, default=192)
     parser.add_argument("--width", type=int, default=192)
     parser.add_argument("--num_surface_vars", type=int, default=5)
-    parser.add_argument("--num_levels", type=int, default=9)
+    parser.add_argument("--num_levels", type=int, default=8)
     parser.add_argument("--num_classes", type=int, default=24)
 
-    # sde锛堟部鐢ㄧ浜屼釜鑴氭湰锛?    parser.add_argument("--sigma_min", type=float, default=2e-2)
+    parser.add_argument("--sigma_min", type=float, default=1e-3)
     parser.add_argument("--sigma_max", type=float, default=10.0)
     parser.add_argument("--sigma_cap", type=float, default=10.0)
     parser.add_argument("--sigma_jitter_log", type=float, default=0.0)
@@ -104,7 +103,7 @@ def build_parser():
     parser.add_argument("--save_every", type=int, default=5)
     parser.add_argument("--eval_seed", type=int, default=20251103)
     parser.add_argument("--edm_steps", type=int, default=40)
-    parser.add_argument("--edm_sigma_min", type=float, default=2e-2)
+    parser.add_argument("--edm_sigma_min", type=float, default=1e-3)
     parser.add_argument("--edm_sigma_max", type=float, default=10.0)
     parser.add_argument("--pc_corrector_steps", type=int, default=1)
     parser.add_argument("--pc_snr", type=float, default=0.16)
@@ -149,7 +148,6 @@ def validate_args(args):
     assert args.weight_decay >= 0
     assert args.num_workers >= 0
     assert args.grad_clip > 0
-    assert args.train_count >= 1
     assert args.height >= 1 and args.width >= 1
     assert args.num_surface_vars >= 1
     assert args.num_levels >= 1
@@ -406,7 +404,7 @@ def prepare_batch(fc, err, label, valid_time, init_time, topo_base, device, args
     assert err.ndim == 4, f"Expected err to be 4D [B,C,H,W], got shape={tuple(err.shape)}"
 
     batch_size = fc.shape[0]
-    expected_fc_channels = args.num_surface_vars * args.num_levels
+    expected_fc_channels = args.num_surface_vars * (args.num_levels + 1)
     expected_err_channels = args.num_surface_vars
 
     assert fc.shape[1] == expected_fc_channels, (
@@ -419,12 +417,10 @@ def prepare_batch(fc, err, label, valid_time, init_time, topo_base, device, args
     assert err.shape[2] >= args.height and err.shape[3] >= args.width
 
     target_error = err[:, :, :args.height, :args.width].to(device, non_blocking=True)
-    forecast_surface_2d = fc[:, ::args.num_levels, :args.height, :args.width].to(device, non_blocking=True)
-
     forecast_raw = fc[:, :, :args.height, :args.width].to(device, non_blocking=True)
-    forecast_3d = forecast_raw.reshape(
-        batch_size, args.num_surface_vars, args.num_levels, args.height, args.width
-    )
+    grouped = forecast_raw.reshape(batch_size, args.num_surface_vars, args.num_levels + 1, args.height, args.width)
+    forecast_surface_2d = grouped[:, :, 0]
+    forecast_3d = grouped[:, :, 1:]
 
     topo_data = topo_base.expand(batch_size, -1, -1, -1).to(dtype=target_error.dtype)
     label_tensor = label.long().to(device, non_blocking=True)
@@ -468,7 +464,7 @@ def pc_sampler(
     device,
     batch,
     z_coord_hpa,
-    sigma_min=2e-2,
+    sigma_min=1e-3,
     sigma_max=10.0,
     rho=7.0,
     steps=40,
@@ -676,9 +672,7 @@ def main():
     assert os.path.exists(args.err_scaler_path), f"Error normalizer file not found: {args.err_scaler_path}"
 
     all_filepaths = sorted(glob.glob(args.data_root_glob))
-    assert len(all_filepaths) > args.train_count + args.valid_count, (
-        "Total files must be > train_count + valid_count"
-    )
+    assert all_filepaths, f"No files matched {args.data_root_glob}"
 
     normalizer_forecast = DataNormalizer_fc.load(args.forecast_scaler_path)
     normalizer_err = DataNormalizer_err.load(args.err_scaler_path)
@@ -686,9 +680,9 @@ def main():
     if is_main_process():
         print("Total files:", len(all_filepaths))
 
-    train_files = all_filepaths[:args.train_count]
-    valid_files = all_filepaths[args.train_count: args.train_count + args.valid_count]
-    test_files = all_filepaths[args.train_count + args.valid_count:]
+    train_files = select_date_split(all_filepaths, "train")
+    valid_files = select_date_split(all_filepaths, "valid")
+    test_files = select_date_split(all_filepaths, "test")
     assert len(train_files) > 0
     assert len(valid_files) > 0
     assert len(test_files) > 0
@@ -746,7 +740,7 @@ def main():
     sde = VESDE(sigma_min=args.sigma_min, sigma_max=effective_sigma_max, N=args.N)
 
     fixed_levels = torch.tensor(
-        [1013.25, 925.0, 850.0, 700.0, 500.0, 300.0, 200.0, 150.0, 100.0],
+        [925.0, 850.0, 700.0, 500.0, 300.0, 200.0, 150.0, 100.0],
         dtype=torch.float32,
         device=device,
     )
@@ -808,11 +802,7 @@ def main():
         eps=1e-8,
         weight_decay=args.weight_decay,
     )
-    scheduler = CosineAnnealingLR(
-        optimizer,
-        T_max=max(1, args.epochs),
-        eta_min=max(1e-7, args.lr * 0.1),
-    )
+    scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=5, min_lr=1e-6)
 
     ema = ExponentialMovingAverage(unwrap_model(model).parameters(), decay=args.ema_decay)
 
@@ -916,7 +906,6 @@ def main():
             denom = torch.clamp_min(stats_t[-1], 1.0)
             avg_train_loss = (stats_t[0] / denom).item()
             avg_train_score = (stats_t[1] / denom).item()
-            scheduler.step()
 
             if is_main_process():
                 elapsed = time.time() - start_time
@@ -959,6 +948,7 @@ def main():
                         z_coord_hpa=fixed_levels.view(1, -1),
                         current_epoch=epoch + 1,
                     )
+                scheduler.step(mse_norm)
 
                 if is_main_process():
                     print(
@@ -1055,5 +1045,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

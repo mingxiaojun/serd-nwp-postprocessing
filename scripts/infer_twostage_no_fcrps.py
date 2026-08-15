@@ -33,6 +33,7 @@ from serd.data.forecast_error_dataset import ForecastDataset
 from serd.data.normalizer_forecast import DataNormalizer as DataNormalizer_fc
 from serd.data.normalizer_error import DataNormalizer as DataNormalizer_err
 from serd.models import physcond_error_diffusion
+from serd.paper.spec import select_date_split
 
 
 
@@ -43,17 +44,17 @@ from serd.models import physcond_error_diffusion
 HEIGHT = 192
 WIDTH = 192
 NUM_SURFACE_VARS = 5
-NUM_LEVELS = 9
+NUM_LEVELS = 8
 NUM_CLASSES = 24
 N_DISCRETE_SIGMAS = 256
 EDM_RHO = 7.0
 INIT_NOISE_TEMP = 1.0
 EMA_DECAY = 0.999
 
-FIXED_LEVELS_HPA = [1013.25, 925.0, 850.0, 700.0, 500.0, 300.0, 200.0, 150.0, 100.0]
+FIXED_LEVELS_HPA = [925.0, 850.0, 700.0, 500.0, 300.0, 200.0, 150.0, 100.0]
 
 FORECAST_SCALER_NAME = "scalers_forecast_zscore_two_step_unet_train.pkl"
-ERR_SCALER_NAME = "scalers_err_zscore_two_step_unet_train.pkl"
+ERR_SCALER_NAME = "scalers_stage2_residual_zscore_train.pkl"
 
 # Model hyperparameters used in the training script.
 MODEL_CHANNELS_2D = 128
@@ -75,10 +76,12 @@ def build_parser():
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--num_workers", type=int, default=7)
     parser.add_argument("--data_dir", type=str, default="./data")
+    parser.add_argument("--forecast_scaler_path", default=None)
+    parser.add_argument("--err_scaler_path", default=None)
     parser.add_argument(
         "--data_root_glob",
         type=str,
-        default="/path/to/CMA_gfs_time_order_3_72/*[0-9]",
+        default="./data/stage2_residuals_serd_v1/*[0-9]",
     )
     parser.add_argument(
         "--topo_path",
@@ -100,8 +103,6 @@ def build_parser():
         help="Output directory. Results are saved as output_root/init_time/init_time_lead.npy.",
     )
 
-    parser.add_argument("--train_count", type=int, default=1292)
-    parser.add_argument("--valid_count", type=int, default=92)
     parser.add_argument(
         "--split",
         type=str,
@@ -110,7 +111,7 @@ def build_parser():
         help="Dataset split to infer using the unified SERD split.",
     )
 
-    parser.add_argument("--sigma_min", type=float, default=2e-2)
+    parser.add_argument("--sigma_min", type=float, default=1e-3)
     parser.add_argument("--sigma_max", type=float, default=10.0)
     parser.add_argument("--edm_steps", type=int, default=60)
     parser.add_argument("--ensemble_size", type=int, default=16)
@@ -145,8 +146,8 @@ def validate_args(args):
     if not os.path.exists(args.topo_path):
         raise FileNotFoundError(f"topo_path not found: {args.topo_path}")
 
-    forecast_scaler_path = os.path.join(args.data_dir, FORECAST_SCALER_NAME)
-    err_scaler_path = os.path.join(args.data_dir, ERR_SCALER_NAME)
+    forecast_scaler_path = args.forecast_scaler_path or os.path.join(args.data_dir, FORECAST_SCALER_NAME)
+    err_scaler_path = args.err_scaler_path or os.path.join(args.data_dir, ERR_SCALER_NAME)
     if not os.path.exists(forecast_scaler_path):
         raise FileNotFoundError(f"forecast scaler not found: {forecast_scaler_path}")
     if not os.path.exists(err_scaler_path):
@@ -396,15 +397,16 @@ def prepare_batch(fc, err, label, valid_time, init_time, topo_base, device):
         raise ValueError(f"Expected fc to be 4D [B,C,H,W], got shape={tuple(fc.shape)}")
 
     batch_size = fc.shape[0]
-    expected_fc_channels = NUM_SURFACE_VARS * NUM_LEVELS
+    expected_fc_channels = NUM_SURFACE_VARS * (NUM_LEVELS + 1)
     if fc.shape[1] != expected_fc_channels:
         raise ValueError(f"fc channel mismatch: expected {expected_fc_channels}, got {fc.shape[1]}")
     if fc.shape[2] < HEIGHT or fc.shape[3] < WIDTH:
         raise ValueError(f"fc spatial size {tuple(fc.shape[2:])} is smaller than target {(HEIGHT, WIDTH)}")
 
-    forecast_surface_2d = fc[:, ::NUM_LEVELS, :HEIGHT, :WIDTH].to(device, non_blocking=True)
     forecast_raw = fc[:, :, :HEIGHT, :WIDTH].to(device, non_blocking=True)
-    forecast_3d = forecast_raw.reshape(batch_size, NUM_SURFACE_VARS, NUM_LEVELS, HEIGHT, WIDTH)
+    grouped = forecast_raw.reshape(batch_size, NUM_SURFACE_VARS, NUM_LEVELS + 1, HEIGHT, WIDTH)
+    forecast_surface_2d = grouped[:, :, 0]
+    forecast_3d = grouped[:, :, 1:]
 
     topo_data = topo_base.expand(batch_size, -1, -1, -1).to(dtype=forecast_raw.dtype)
     label_tensor = label.long().to(device, non_blocking=True)
@@ -563,7 +565,7 @@ def save_ensemble_batch(gens, init_time_list, label_tensor, output_root):
 # Inference loop
 # =========================================================
 @torch.no_grad()
-def run_inference(model, loader, topo_base, device, sde, fixed_levels, args):
+def run_inference(model, loader, topo_base, device, sde, fixed_levels, args, normalizer_forecast, normalizer_err):
     model.eval()
     device_type = "cuda" if device.type == "cuda" else "cpu"
     use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
@@ -590,8 +592,14 @@ def run_inference(model, loader, topo_base, device, sde, fixed_levels, args):
                 sde=sde,
             )
 
+        gens_np = gens.detach().float().cpu().numpy()
+        k, b, c, h, w = gens_np.shape
+        residual_phys = normalizer_err.inverse_transform(gens_np.reshape(k * b, c, h, w)).reshape(k, b, c, h, w)
+        forecast_phys = normalizer_forecast.inverse_transform(fc.numpy())
+        corrected_surface = forecast_phys.reshape(b, 5, 9, forecast_phys.shape[-2], forecast_phys.shape[-1])[:, :, 0, :h, :w]
+        final_fields = residual_phys + corrected_surface[None]
         save_ensemble_batch(
-            gens=gens,
+            gens=torch.from_numpy(final_fields),
             init_time_list=init_time,
             label_tensor=batch["label"],
             output_root=args.output_root,
@@ -627,23 +635,16 @@ def main():
     if len(all_filepaths) == 0:
         raise RuntimeError(f"No files matched data_root_glob: {args.data_root_glob}")
 
-    normalizer_forecast = DataNormalizer_fc.load(os.path.join(args.data_dir, FORECAST_SCALER_NAME))
-    normalizer_err = DataNormalizer_err.load(os.path.join(args.data_dir, ERR_SCALER_NAME))
+    forecast_scaler_path = args.forecast_scaler_path or os.path.join(args.data_dir, FORECAST_SCALER_NAME)
+    err_scaler_path = args.err_scaler_path or os.path.join(args.data_dir, ERR_SCALER_NAME)
+    normalizer_forecast = DataNormalizer_fc.load(forecast_scaler_path)
+    normalizer_err = DataNormalizer_err.load(err_scaler_path)
 
-    train_end = args.train_count
-    valid_end = args.train_count + args.valid_count
-    if args.split == "train":
-        infer_files = all_filepaths[:train_end]
-    elif args.split == "valid":
-        infer_files = all_filepaths[train_end:valid_end]
-    elif args.split == "test":
-        infer_files = all_filepaths[valid_end:]
-    else:
-        infer_files = all_filepaths
+    infer_files = select_date_split(all_filepaths, args.split)
     if len(infer_files) == 0:
         raise RuntimeError(
             f"No inference files for split={args.split}. "
-            f"Total files={len(all_filepaths)}, train_count={args.train_count}, valid_count={args.valid_count}."
+            f"Total files={len(all_filepaths)}; no files fall in the requested calendar split."
         )
 
     if is_main_process():
@@ -721,6 +722,8 @@ def main():
                     sde=sde,
                     fixed_levels=fixed_levels,
                     args=args,
+                    normalizer_forecast=normalizer_forecast,
+                    normalizer_err=normalizer_err,
                 )
         else:
             run_inference(
@@ -731,6 +734,8 @@ def main():
                 sde=sde,
                 fixed_levels=fixed_levels,
                 args=args,
+                normalizer_forecast=normalizer_forecast,
+                normalizer_err=normalizer_err,
             )
 
         if is_main_process():
@@ -742,7 +747,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-

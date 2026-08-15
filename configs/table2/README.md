@@ -4,9 +4,9 @@ These files map each comparison method in Table 2 of the paper to a concrete cod
 
 The unified split is:
 
-- Train: first 1292 initialization days.
-- Validation: next 92 initialization days.
-- Test: all remaining initialization days.
+- Train: 2020-01-01 through 2023-09-30.
+- Validation: 2023-10-01 through 2023-12-31.
+- Test: 2024-01-01 through 2024-12-31.
 
 Use `scripts/run_table2_*.sh` as the executable entry points.
 

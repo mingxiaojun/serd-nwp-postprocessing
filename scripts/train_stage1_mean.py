@@ -17,28 +17,30 @@ import torch.nn.functional as F
 from torch import amp
 from torch.amp import GradScaler
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from torch_ema import ExponentialMovingAverage
 from tqdm.auto import tqdm
 
-from serd.data.forecast_analysis_dataset import ForecastDataset
+from serd.data.forecast_error_dataset import ForecastDataset
 from serd.data.normalizer_forecast import DataNormalizer as DataNormalizer_fc
-from serd.data.normalizer_analysis import DataNormalizer as DataNormalizer_err
+from serd.data.normalizer_error import DataNormalizer as DataNormalizer_err
 from serd.models import forecast_mean_unet
+from serd.paper.losses import stage1_composite_loss
+from serd.paper.spec import select_date_split
 
 # =========================================================
 # Args
 # =========================================================
 def build_parser():
     parser = argparse.ArgumentParser(
-        description="DDP Train Regression Mean Model with Pure MSE Loss"
+        description="SERD stage 1 composite-loss systematic-error training"
     )
 
     # Basic training settings
     parser.add_argument("--batch_size", type=int, default=3)
-    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--weight_decay", type=float, default=5e-4)
     parser.add_argument("--num_workers", type=int, default=7)
@@ -50,21 +52,19 @@ def build_parser():
     parser.add_argument(
         "--data_root_glob",
         type=str,
-        default="/path/to/CMA_gfs_time_order_3_72/*[0-9]",
+        default="/online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]",
     )
     parser.add_argument(
         "--topo_path",
         type=str,
         default="./data/topo_data_Normalization.npy",
     )
-    parser.add_argument("--train_count", type=int, default=1292)
-    parser.add_argument("--valid_count", type=int, default=92)
 
     # Model and data shape settings
     parser.add_argument("--height", type=int, default=192)
     parser.add_argument("--width", type=int, default=192)
     parser.add_argument("--num_surface_vars", type=int, default=5)
-    parser.add_argument("--num_levels", type=int, default=9)
+    parser.add_argument("--num_levels", type=int, default=8)
     parser.add_argument("--num_classes", type=int, default=24)
 
     # Evaluation settings
@@ -110,8 +110,6 @@ def validate_args(args):
     assert args.weight_decay >= 0, "weight_decay must be >= 0"
     assert args.num_workers >= 0, "num_workers must be >= 0"
     assert args.grad_clip > 0, "grad_clip must be > 0"
-    assert args.train_count >= 1, "train_count must be >= 1"
-    assert args.valid_count >= 1, "valid_count must be >= 1"
     assert args.height >= 1 and args.width >= 1, "height/width must be >= 1"
     assert args.num_surface_vars >= 1, "num_surface_vars must be >= 1"
     assert args.num_levels >= 1, "num_levels must be >= 1"
@@ -302,7 +300,7 @@ def prepare_batch(fc, err, label, valid_time, init_time, topo_base, device, args
     assert err.ndim == 4, f"Expected err to be 4D [B,C,H,W], got shape={tuple(err.shape)}"
 
     batch_size = fc.shape[0]
-    expected_fc_channels = args.num_surface_vars * args.num_levels
+    expected_fc_channels = args.num_surface_vars * (args.num_levels + 1)
     expected_err_channels = args.num_surface_vars
 
     assert fc.shape[1] == expected_fc_channels, (
@@ -319,12 +317,11 @@ def prepare_batch(fc, err, label, valid_time, init_time, topo_base, device, args
     )
 
     target_error = err[:, :, :args.height, :args.width].to(device, non_blocking=True)
-    forecast_surface_2d = fc[:, ::args.num_levels, :args.height, :args.width].to(device, non_blocking=True)
+    grouped = fc[:, :, :args.height, :args.width].reshape(batch_size, args.num_surface_vars, args.num_levels + 1, args.height, args.width)
+    forecast_surface_2d = grouped[:, :, 0].to(device, non_blocking=True)
 
     forecast_raw = fc[:, :, :args.height, :args.width].to(device, non_blocking=True)
-    forecast_3d = forecast_raw.reshape(
-        batch_size, args.num_surface_vars, args.num_levels, args.height, args.width
-    )
+    forecast_3d = grouped[:, :, 1:].to(device, non_blocking=True)
 
     topo_data = topo_base.expand(batch_size, -1, -1, -1).to(dtype=target_error.dtype)
     label_tensor = label.long().to(device, non_blocking=True)
@@ -492,22 +489,19 @@ def main():
     if is_main_process():
         print(f"DDP training on device: {device}, world_size={world_size}, rank={rank}, local_rank={local_rank}")
         print("Task: regression mean model for system-bias-like error")
-        print("Loss = MSE")
+        print("Loss = 0.10 point + 0.50 conditional + 0.20 regional + 0.15 low-frequency + 0.03 TV")
 
     if is_main_process():
         print("Loading datasets...")
 
     forecast_scaler_path = os.path.join(args.data_dir, "scalers_forecast_zscore_two_step_unet_train.pkl")
-    error_scaler_path = os.path.join(args.data_dir, "scalers_ana_zscore_two_step_unet_train.pkl")
+    error_scaler_path = os.path.join(args.data_dir, "scalers_err_zscore_two_step_unet_train.pkl")
 
     assert os.path.exists(forecast_scaler_path), f"Forecast normalizer file not found: {forecast_scaler_path}"
     assert os.path.exists(error_scaler_path), f"Error normalizer file not found: {error_scaler_path}"
 
     all_filepaths = sorted(glob.glob(args.data_root_glob))
-    assert len(all_filepaths) > args.train_count + args.valid_count, (
-        f"Total files={len(all_filepaths)} must be > "
-        f"train_count + valid_count = {args.train_count + args.valid_count}"
-    )
+    assert all_filepaths, f"No files matched {args.data_root_glob}"
 
     normalizer_forecast = DataNormalizer_fc.load(forecast_scaler_path)
     normalizer_err = DataNormalizer_err.load(error_scaler_path)
@@ -515,9 +509,9 @@ def main():
     if is_main_process():
         print("Total files:", len(all_filepaths))
 
-    train_files = all_filepaths[:args.train_count]
-    valid_files = all_filepaths[args.train_count: args.train_count + args.valid_count]
-    test_files = all_filepaths[args.train_count + args.valid_count:]
+    train_files = select_date_split(all_filepaths, "train")
+    valid_files = select_date_split(all_filepaths, "valid")
+    test_files = select_date_split(all_filepaths, "test")
     assert len(train_files) > 0, "train_files is empty"
     assert len(valid_files) > 0, "valid_files is empty"
     assert len(test_files) > 0, "test_files is empty"
@@ -598,7 +592,7 @@ def main():
     in_channels_2d = topo_base.shape[1] + out_channels
 
     fixed_levels = torch.tensor(
-        [1013.25, 925.0, 850.0, 700.0, 500.0, 300.0, 200.0, 150.0, 100.0],
+        [925.0, 850.0, 700.0, 500.0, 300.0, 200.0, 150.0, 100.0],
         dtype=torch.float32,
     )
 
@@ -649,11 +643,7 @@ def main():
         eps=1e-8,
         weight_decay=args.weight_decay,
     )
-    scheduler = CosineAnnealingLR(
-        optimizer,
-        T_max=max(1, args.epochs),
-        eta_min=max(1e-6, args.lr * 0.1),
-    )
+    scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=5, min_lr=1e-6)
 
     ema_params = model.module.parameters() if isinstance(model, DDP) else model.parameters()
     ema = ExponentialMovingAverage(ema_params, decay=args.ema_decay)
@@ -705,7 +695,7 @@ def main():
                     enabled=(device_type == "cuda"),
                 ):
                     pred_error = run_model(model, batch)
-                    loss = F.mse_loss(pred_error, batch["target_error"])
+                    loss, _ = stage1_composite_loss(pred_error, batch["target_error"], batch["label"])
 
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
@@ -729,7 +719,6 @@ def main():
             denom = torch.clamp_min(loss_sum_tensor[1], 1.0)
             avg_train_loss = (loss_sum_tensor[0] / denom).item()
 
-            scheduler.step()
 
             if is_main_process():
                 elapsed = time.time() - start_time
@@ -754,6 +743,7 @@ def main():
                         phys_std=phys_std,
                         current_epoch=epoch + 1,
                     )
+                scheduler.step(mse_norm)
 
                 if is_main_process():
                     print(
@@ -820,5 +810,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

@@ -1,9 +1,10 @@
 import numpy as np
-import glob
 import torch
 import os
 from torch.utils.data import Dataset, DataLoader
 from datetime import datetime, timedelta
+
+from serd.paper.spec import LEAD_HOURS, file_candidates, find_existing, validate_forecast_shape
 
 
 # --------------------------
@@ -39,17 +40,12 @@ class ForecastDataset(Dataset):
             time0 = os.path.basename(file_path.rstrip("/\\"))
             time = datetime.strptime(str(time0), "%Y%m%d").strftime("%Y_%m_%d")
             time = str(time)
-            for j in np.arange(3,73,3):
-                j = int(j)
-                fc = glob.glob(os.path.join(file_path, f"{time}_{j}.npy"))
-                if len(fc) == 0:
-                    fc = glob.glob(os.path.join(file_path, f"{time}_{j:02d}.npy"))
-                fc_err = glob.glob(os.path.join(file_path, f"{time}_{j}_err.npy"))
-                if len(fc_err) == 0:
-                    fc_err = glob.glob(os.path.join(file_path, f"{time}_{j:02d}_err.npy"))
-                if len(fc) != 0 and len(fc_err) != 0:
+            for j in LEAD_HOURS:
+                fc = find_existing(file_candidates(file_path, time, j))
+                fc_err = find_existing(file_candidates(file_path, time, j, "_err"))
+                if fc is not None and fc_err is not None:
                     parse_time,init0_time = parse_forecast_time(time, j)
-                    self.samples.append((fc[0], fc_err[0], j/3,parse_time,init0_time))
+                    self.samples.append((str(fc), str(fc_err), j/3,parse_time,init0_time))
 
     def __len__(self):
         return len(self.samples)
@@ -59,19 +55,24 @@ class ForecastDataset(Dataset):
         lead = lead -1
 
         # 加载 numpy 数据
-        fc = np.load(fc_path).reshape(1,45,200,200)
-        err = np.load(err_path).reshape(1,5,200,200)
+        fc_raw = np.load(fc_path)
+        validate_forecast_shape(tuple(fc_raw.shape))
+        if np.load(err_path, mmap_mode="r").shape[0] != 5:
+            raise ValueError(f"Expected raw physical error [5,H,W]: {err_path}")
+        fc = fc_raw.reshape(1,45,*fc_raw.shape[-2:])
+        err_raw = np.load(err_path)
+        err = err_raw.reshape(1,5,*err_raw.shape[-2:])
 
         # 归一化
         # print(fc.shape,err.shape)
         fc = self.normalizer_forecast.transform(fc)
         err = self.normalizer_err.transform(err)
 
-        fc = fc.reshape(45,200,200)
-        err = err.reshape(5,200,200)
+        fc = fc.reshape(45,*fc.shape[-2:])
+        err = err.reshape(5,*err.shape[-2:])
         # 堆叠
         # data = np.stack([fc, err], axis=0)  # shape [2, ...]
-        
+
         # 转换为 torch.Tensor
         fc = torch.tensor(fc, dtype=torch.float32)
         err = torch.tensor(err, dtype=torch.float32)

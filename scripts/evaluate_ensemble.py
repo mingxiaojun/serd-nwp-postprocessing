@@ -1,175 +1,133 @@
-﻿import argparse
+"""Evaluate final physical-unit forecast ensembles for Table 3 and Figures 4--8."""
+from __future__ import annotations
+
+import argparse
 import csv
 import glob
-import os
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 
+from serd.paper.metrics import absolute_coverage_error, empirical_crps, rank_histogram
+from serd.paper.spec import LEAD_HOURS, SURFACE_VARIABLES, file_candidates, find_existing, select_date_split
 
-VARIABLES = ["q2m", "u10", "v10", "sp", "t2m"]
 
-
-def build_parser():
-    parser = argparse.ArgumentParser(
-        description="Evaluate saved SERD ensemble samples against residual-error targets."
-    )
-    parser.add_argument("--sample_root", type=str, required=True)
-    parser.add_argument("--target_root_glob", type=str, required=True)
-    parser.add_argument("--out_dir", type=str, default="./outputs/metrics/serd_v1")
-    parser.add_argument("--train_count", type=int, default=1292)
-    parser.add_argument("--valid_count", type=int, default=92)
-    parser.add_argument("--split", type=str, default="test", choices=["train", "valid", "test", "all"])
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--sample_root", required=True, help="Final physical ensembles [16,5,H,W]")
+    parser.add_argument("--target_root_glob", default="/online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]")
+    parser.add_argument("--out_dir", default="./outputs/metrics")
+    parser.add_argument("--split", default="test", choices=("train", "valid", "test"))
     parser.add_argument("--height", type=int, default=192)
     parser.add_argument("--width", type=int, default=192)
     return parser
 
 
-def select_split(paths, split, train_count, valid_count):
-    train_end = train_count
-    valid_end = train_count + valid_count
-    if split == "train":
-        return paths[:train_end]
-    if split == "valid":
-        return paths[train_end:valid_end]
-    if split == "test":
-        return paths[valid_end:]
-    return paths
+def load_ensemble(path: Path) -> np.ndarray:
+    value = np.load(path).astype(np.float32)
+    if value.ndim != 4 or value.shape[1] != 5:
+        raise ValueError(f"Expected final physical ensemble [K,5,H,W], got {value.shape}: {path}")
+    if value.shape[0] != 16:
+        raise ValueError(f"Paper evaluation requires K=16, got K={value.shape[0]}: {path}")
+    return value
 
 
-def fair_crps_ensemble(ens, obs):
-    # ens: [K,H,W], obs: [H,W]
-    k = ens.shape[0]
-    term1 = np.mean(np.abs(ens - obs[None, ...]), axis=0)
-    if k <= 1:
-        return term1
-    diffs = np.abs(ens[:, None, ...] - ens[None, :, ...])
-    pair = np.sum(diffs, axis=(0, 1)) / (k * (k - 1))
-    return term1 - 0.5 * pair
-
-
-def load_ensemble(path):
-    arr = np.load(path)
-    if arr.ndim == 3:
-        arr = arr[None, ...]
-    if arr.ndim != 4:
-        raise ValueError(f"Expected [K,C,H,W] or [C,H,W], got {arr.shape}: {path}")
-    return arr.astype(np.float32)
-
-
-def target_file_for_day(day_dir, lead_hour):
-    day_name = os.path.basename(day_dir.rstrip("/\\"))
-    try:
-        date_token = datetime.strptime(day_name, "%Y%m%d").strftime("%Y_%m_%d")
-    except ValueError:
-        date_token = datetime.strptime(day_name, "%Y-%m-%d-%H").strftime("%Y_%m_%d")
-    candidates = [
-        os.path.join(day_dir, f"{date_token}_{lead_hour}_err.npy"),
-        os.path.join(day_dir, f"{date_token}_{lead_hour:02d}_err.npy"),
-    ]
-    for path in candidates:
-        if os.path.exists(path):
-            return path
-    return candidates[0]
-
-
-def main():
+def main() -> None:
     args = build_parser().parse_args()
-    os.makedirs(args.out_dir, exist_ok=True)
-
-    target_days = select_split(
-        sorted(glob.glob(args.target_root_glob)),
-        args.split,
-        args.train_count,
-        args.valid_count,
-    )
-    if not target_days:
-        raise RuntimeError(f"No target days selected for split={args.split}")
-
-    n_vars = len(VARIABLES)
-    se_sum = np.zeros(n_vars, dtype=np.float64)
-    spread_sum = np.zeros(n_vars, dtype=np.float64)
-    crps_sum = np.zeros(n_vars, dtype=np.float64)
-    count = np.zeros(n_vars, dtype=np.float64)
-    coverage_inside = {0.80: np.zeros(n_vars), 0.90: np.zeros(n_vars), 0.95: np.zeros(n_vars)}
-    rank_hist = None
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    shape = (len(LEAD_HOURS), len(SURFACE_VARIABLES))
+    error_sum = np.zeros(shape, dtype=np.float64)
+    se_sum = np.zeros(shape, dtype=np.float64)
+    spread_sum = np.zeros(shape, dtype=np.float64)
+    crps_sum = np.zeros(shape, dtype=np.float64)
+    inside80 = np.zeros(shape, dtype=np.int64)
+    inside90 = np.zeros(shape, dtype=np.int64)
+    counts = np.zeros(shape, dtype=np.int64)
+    rank_counts = np.zeros((len(SURFACE_VARIABLES), 17), dtype=np.int64)
     missing = 0
 
-    for target_day in target_days:
-        day_name = os.path.basename(target_day.rstrip("/\\"))
-        try:
-            init_time = datetime.strptime(day_name, "%Y%m%d").replace(hour=9).strftime("%Y-%m-%d-%H")
-        except ValueError:
-            init_time = day_name
-        sample_day = os.path.join(args.sample_root, init_time)
-        for lead_hour in range(3, 73, 3):
-            sample_path = os.path.join(sample_day, f"{init_time}_{lead_hour:02d}.npy")
-            target_path = target_file_for_day(target_day, lead_hour)
-            if not os.path.exists(sample_path) or not os.path.exists(target_path):
+    for day_text in select_date_split(sorted(glob.glob(args.target_root_glob)), args.split):
+        day_dir = Path(day_text)
+        day = datetime.strptime(day_dir.name, "%Y%m%d")
+        date_token = day.strftime("%Y_%m_%d")
+        init_token = day.replace(hour=9).strftime("%Y-%m-%d-%H")
+        for lead_index, lead in enumerate(LEAD_HOURS):
+            sample_path = Path(args.sample_root) / init_token / f"{init_token}_{lead:02d}.npy"
+            analysis_path = find_existing(file_candidates(day_dir, date_token, lead, "_analysis"))
+            if not sample_path.is_file() or analysis_path is None:
                 missing += 1
                 continue
-
             ens = load_ensemble(sample_path)[:, :, :args.height, :args.width]
-            obs = np.load(target_path).astype(np.float32)[:, :args.height, :args.width]
-            k = ens.shape[0]
-            if rank_hist is None:
-                rank_hist = np.zeros((n_vars, k + 1), dtype=np.float64)
+            obs = np.load(analysis_path).astype(np.float32)[:, :args.height, :args.width]
+            mean = ens.mean(axis=0)
+            spread = ens.std(axis=0, ddof=1)
+            crps = empirical_crps(ens, obs, member_axis=0)
+            for index, variable in enumerate(SURFACE_VARIABLES):
+                del variable
+                error = mean[index] - obs[index]
+                error_sum[lead_index, index] += error.sum()
+                se_sum[lead_index, index] += np.square(error).sum()
+                spread_sum[lead_index, index] += spread[index].sum()
+                crps_sum[lead_index, index] += crps[index].sum()
+                lo80, hi80 = np.quantile(ens[:, index], (.10, .90), axis=0)
+                lo90, hi90 = np.quantile(ens[:, index], (.05, .95), axis=0)
+                inside80[lead_index, index] += np.count_nonzero((obs[index] >= lo80) & (obs[index] <= hi80))
+                inside90[lead_index, index] += np.count_nonzero((obs[index] >= lo90) & (obs[index] <= hi90))
+                counts[lead_index, index] += obs[index].size
+                rank_counts[index] += rank_histogram(ens[:, index], obs[index])
 
-            mean = np.mean(ens, axis=0)
-            spread = np.std(ens, axis=0, ddof=1) if k > 1 else np.zeros_like(mean)
-            for v in range(n_vars):
-                err = mean[v] - obs[v]
-                se_sum[v] += np.sum(err * err)
-                spread_sum[v] += np.sum(spread[v])
-                crps_sum[v] += np.sum(fair_crps_ensemble(ens[:, v], obs[v]))
-                n = obs[v].size
-                count[v] += n
-
-                for nominal in coverage_inside:
-                    alpha = 1.0 - nominal
-                    lo = np.quantile(ens[:, v], alpha / 2.0, axis=0)
-                    hi = np.quantile(ens[:, v], 1.0 - alpha / 2.0, axis=0)
-                    coverage_inside[nominal][v] += np.sum((obs[v] >= lo) & (obs[v] <= hi))
-
-                ranks = np.sum(ens[:, v] < obs[v][None, ...], axis=0)
-                rank_hist[v] += np.bincount(ranks.ravel(), minlength=k + 1)
-
-    rmse = np.sqrt(se_sum / np.maximum(count, 1.0))
-    spread = spread_sum / np.maximum(count, 1.0)
-    spread_rmse = spread / np.maximum(rmse, 1e-12)
-    crps = crps_sum / np.maximum(count, 1.0)
-
-    metrics_path = os.path.join(args.out_dir, f"{args.split}_metrics.csv")
-    with open(metrics_path, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["variable", "rmse", "spread", "spread_rmse", "fcrps", "count"])
-        for i, name in enumerate(VARIABLES):
-            writer.writerow([name, rmse[i], spread[i], spread_rmse[i], crps[i], int(count[i])])
-
-    coverage_path = os.path.join(args.out_dir, f"{args.split}_coverage.csv")
-    with open(coverage_path, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["nominal", "variable", "coverage", "coverage_error"])
-        for nominal, inside in coverage_inside.items():
-            for i, name in enumerate(VARIABLES):
-                cov = inside[i] / max(count[i], 1.0)
-                writer.writerow([nominal, name, cov, cov - nominal])
-
-    rank_path = os.path.join(args.out_dir, f"{args.split}_rank_histogram.csv")
-    if rank_hist is not None:
-        with open(rank_path, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(["variable", "rank", "count"])
-            for i, name in enumerate(VARIABLES):
-                for rank, value in enumerate(rank_hist[i]):
-                    writer.writerow([name, rank, value])
-
-    print(f"Saved metrics to {metrics_path}")
-    print(f"Saved coverage to {coverage_path}")
-    print(f"Saved rank histogram to {rank_path}")
-    print(f"Missing sample/target lead cases: {missing}")
+    if not np.any(counts):
+        raise RuntimeError("No matched physical ensembles and analysis files were found")
+    rows: list[dict[str, object]] = []
+    for lead_index, lead in enumerate(LEAD_HOURS):
+        for variable_index, variable in enumerate(SURFACE_VARIABLES):
+            count = int(counts[lead_index, variable_index])
+            if count == 0:
+                continue
+            actual80 = inside80[lead_index, variable_index] / count
+            actual90 = inside90[lead_index, variable_index] / count
+            rows.append({
+                "lead_hour": lead, "variable": variable,
+                "bias": float(error_sum[lead_index, variable_index] / count),
+                "rmse": float(np.sqrt(se_sum[lead_index, variable_index] / count)),
+                "spread": float(spread_sum[lead_index, variable_index] / count),
+                "crps": float(crps_sum[lead_index, variable_index] / count),
+                "coverage_error_80": absolute_coverage_error(actual80, .80),
+                "coverage_error_90": absolute_coverage_error(actual90, .90),
+                "count": count,
+            })
+    with (out_dir / f"{args.split}_lead_metrics.csv").open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    with (out_dir / f"{args.split}_table3_metrics.csv").open("w", newline="") as handle:
+        fieldnames = ("variable", "bias", "rmse", "spread", "crps", "coverage_error_80", "coverage_error_90", "count")
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for variable_index, variable in enumerate(SURFACE_VARIABLES):
+            count = int(counts[:, variable_index].sum())
+            actual80 = inside80[:, variable_index].sum() / count
+            actual90 = inside90[:, variable_index].sum() / count
+            writer.writerow({
+                "variable": variable,
+                "bias": float(error_sum[:, variable_index].sum() / count),
+                "rmse": float(np.sqrt(se_sum[:, variable_index].sum() / count)),
+                "spread": float(spread_sum[:, variable_index].sum() / count),
+                "crps": float(crps_sum[:, variable_index].sum() / count),
+                "coverage_error_80": absolute_coverage_error(actual80, .80),
+                "coverage_error_90": absolute_coverage_error(actual90, .90),
+                "count": count,
+            })
+    with (out_dir / f"{args.split}_rank_histogram.csv").open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(("variable", "rank", "count"))
+        for variable_index, variable in enumerate(SURFACE_VARIABLES):
+            for rank, count in enumerate(rank_counts[variable_index]):
+                writer.writerow((variable, rank, int(count)))
+    print(f"lead_variable_rows={len(rows)} missing_samples={missing}")
 
 
 if __name__ == "__main__":
     main()
-

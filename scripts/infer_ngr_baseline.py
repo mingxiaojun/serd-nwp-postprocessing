@@ -45,6 +45,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 from serd.data.normalizer_forecast import DataNormalizer as DataNormalizer_fc
+from serd.paper.spec import select_date_split
 
 
 VAR_NAMES = ["q2m", "u10", "v10", "sp", "t2m"]
@@ -74,7 +75,7 @@ def build_parser():
     parser.add_argument(
         "--data_root_glob",
         type=str,
-        default="/path/to/CMA_gfs_time_order_3_72/*[0-9]",
+        default="/online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]",
     )
 
     parser.add_argument(
@@ -83,8 +84,6 @@ def build_parser():
         default="./data/topo_data_Normalization.npy",
     )
 
-    parser.add_argument("--train_count", type=int, default=1292)
-    parser.add_argument("--valid_count", type=int, default=92)
 
     parser.add_argument(
         "--split",
@@ -271,7 +270,7 @@ def load_stats(args):
     )
     error_scaler_path = os.path.join(
         args.data_dir,
-        "scalers_ana_zscore_two_step_unet_train.pkl",
+        "scalers_err_zscore_two_step_unet_train.pkl",
     )
 
     if not os.path.exists(forecast_scaler_path):
@@ -557,10 +556,9 @@ def main():
     all_filepaths = sorted(glob.glob(args.data_root_glob))
 
     if args.split == "test":
-        start = args.train_count + args.valid_count
-        file_paths = all_filepaths[start:]
+        file_paths = select_date_split(all_filepaths, "test")
     elif args.split == "all":
-        file_paths = all_filepaths
+        file_paths = select_date_split(all_filepaths, "all")
     else:
         if args.custom_start_index is None:
             raise ValueError("--custom_start_index is required when --split custom")
@@ -675,6 +673,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 
