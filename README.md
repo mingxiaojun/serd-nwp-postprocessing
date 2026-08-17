@@ -91,6 +91,12 @@ python scripts/audit_paper_dataset.py --strict
 
 This writes included/excluded CSV manifests and checks the manuscript counts `32560/2208/8685`.
 
+Paper evaluation is strict by default. The evaluator reconstructs the canonical source manifest from
+forecast, error, and analysis files; requires the manuscript sample count for the selected split; and
+fails if any method output is missing. Ensemble filenames use two-digit lead hours (`_03.npy`,
+`_06.npy`, ..., `_72.npy`). The complete Table 2 runner additionally checks all probabilistic methods
+against the same 8,685 test-sample keys before Figure 8 is evaluated.
+
 Evaluate test ensembles:
 
 ```bash
@@ -128,3 +134,4 @@ The NGR baseline uses the same explicit calendar split and the same final physic
 - Ensemble spread uses sample standard deviation (`ddof=1`).
 - Coverage error is `abs(actual - nominal)`.
 - Rank histograms have 17 bins for the 16-member ensembles.
+- Figure 8 stores the difference as `CorrDiff - SERD`, matching the manuscript caption.

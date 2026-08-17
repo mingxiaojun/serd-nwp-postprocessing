@@ -9,6 +9,9 @@ import numpy as np
 
 from serd.paper.metrics import absolute_coverage_error, empirical_crps, ensemble_spread, rank_histogram
 from serd.paper.reconstruction import reconstruct_corrdiff, reconstruct_total_error, reconstruct_two_stage
+from serd.paper.samples import (EXPECTED_POST_QC_SAMPLES, ensemble_filename,
+                                require_common_method_outputs,
+                                source_sample_manifest)
 from serd.paper.spec import (FORECAST_CHANNELS, PAPER_SPEC, PRESSURE_LEVELS_HPA,
                              SURFACE_CHANNEL_INDICES, file_candidates, select_date_split,
                              split_forecast_channels)
@@ -39,6 +42,37 @@ class PaperContractTests(unittest.TestCase):
             expected.touch()
             candidates = file_candidates(folder, "2020_01_08", 48, "_err")
             self.assertIn(expected, candidates)
+
+    def test_zero_padded_ensemble_filename(self):
+        self.assertEqual(ensemble_filename("2024-01-01-09", 3), "2024-01-01-09_03.npy")
+        self.assertEqual(ensemble_filename("2024-01-01-09", 48), "2024-01-01-09_48.npy")
+
+    def test_common_sample_manifest_is_exact(self):
+        self.assertEqual(EXPECTED_POST_QC_SAMPLES["test"], 8685)
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            day = root / "20240101"
+            day.mkdir()
+            for name in (
+                "2024_01_01_3.npy",
+                "2024_01_01_3_err.npy",
+                "2024_01_01_3_analysis.npy",
+            ):
+                (day / name).touch()
+            samples, excluded = source_sample_manifest([day], "test")
+            self.assertEqual(len(samples), 1)
+            self.assertEqual(len(excluded), 23)
+            method_a = root / "method_a"
+            method_b = root / "method_b"
+            output = samples[0].ensemble_path(method_a)
+            output.parent.mkdir(parents=True)
+            output.touch()
+            with self.assertRaisesRegex(RuntimeError, "method_b"):
+                require_common_method_outputs(samples, {"method_a": method_a, "method_b": method_b})
+            output_b = samples[0].ensemble_path(method_b)
+            output_b.parent.mkdir(parents=True)
+            output_b.touch()
+            require_common_method_outputs(samples, {"method_a": method_a, "method_b": method_b})
 
     def test_empirical_crps_uses_k_squared_pair_term(self):
         ensemble = np.array([0.0, 2.0])

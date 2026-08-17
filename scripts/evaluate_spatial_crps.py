@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import argparse
 import glob
-from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 
 from serd.paper.metrics import empirical_crps
-from serd.paper.spec import file_candidates, find_existing, select_date_split
+from serd.paper.samples import (require_common_method_outputs,
+                                require_expected_source_count,
+                                source_sample_manifest)
 
 
 def main() -> None:
@@ -25,23 +26,20 @@ def main() -> None:
     sums = {method: np.zeros((3, args.height, args.width), dtype=np.float64) for method in ("serd", "corrdiff")}
     counts = np.zeros(3, dtype=np.int64)
     roots = {"serd": Path(args.serd_root), "corrdiff": Path(args.corrdiff_root)}
-    for day_text in select_date_split(sorted(glob.glob(args.target_root_glob)), "test"):
-        day_dir = Path(day_text)
-        day = datetime.strptime(day_dir.name, "%Y%m%d")
-        date_token = day.strftime("%Y_%m_%d")
-        init_token = day.replace(hour=9).strftime("%Y-%m-%d-%H")
-        for lead_index, lead in enumerate(leads):
-            analysis_path = find_existing(file_candidates(day_dir, date_token, lead, "_analysis"))
-            sample_paths = {method: root / init_token / f"{init_token}_{lead:02d}.npy" for method, root in roots.items()}
-            if analysis_path is None or any(not path.is_file() for path in sample_paths.values()):
-                continue
-            observation = np.load(analysis_path).astype(np.float32)[4, :args.height, :args.width]
-            for method, path in sample_paths.items():
-                ensemble = np.load(path).astype(np.float32)[:, 4, :args.height, :args.width]
-                if ensemble.shape[0] != 16:
-                    raise ValueError(f"Figure 8 requires K=16: {path}")
-                sums[method][lead_index] += empirical_crps(ensemble, observation)
-            counts[lead_index] += 1
+    samples, _ = source_sample_manifest(sorted(glob.glob(args.target_root_glob)), "test")
+    require_expected_source_count(samples, "test")
+    figure_samples = [sample for sample in samples if sample.lead_hour in leads]
+    require_common_method_outputs(figure_samples, roots)
+    for sample in figure_samples:
+        lead_index = leads.index(sample.lead_hour)
+        observation = np.load(sample.analysis_path).astype(np.float32)[4, :args.height, :args.width]
+        for method, root in roots.items():
+            path = sample.ensemble_path(root)
+            ensemble = np.load(path).astype(np.float32)[:, 4, :args.height, :args.width]
+            if ensemble.shape[0] != 16:
+                raise ValueError(f"Figure 8 requires K=16: {path}")
+            sums[method][lead_index] += empirical_crps(ensemble, observation)
+        counts[lead_index] += 1
     if np.any(counts == 0):
         raise RuntimeError(f"No matched test samples for one or more Figure 8 leads: counts={counts.tolist()}")
     serd = sums["serd"] / counts[:, None, None]
@@ -49,7 +47,7 @@ def main() -> None:
     out_path = Path(args.out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(out_path, leads=np.asarray(leads), serd_crps=serd.astype(np.float32),
-             corrdiff_crps=corrdiff.astype(np.float32), difference=(serd - corrdiff).astype(np.float32), counts=counts)
+             corrdiff_crps=corrdiff.astype(np.float32), difference=(corrdiff - serd).astype(np.float32), counts=counts)
     print(out_path)
 
 

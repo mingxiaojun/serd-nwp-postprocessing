@@ -45,7 +45,8 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 from serd.data.normalizer_forecast import DataNormalizer as DataNormalizer_fc
-from serd.paper.spec import select_date_split
+from serd.paper.samples import ensemble_filename
+from serd.paper.spec import file_candidates, find_existing, select_date_split
 
 
 VAR_NAMES = ["q2m", "u10", "v10", "sp", "t2m"]
@@ -176,14 +177,14 @@ class ForecastOnlyDataset(Dataset):
 
             for lead_hour in np.arange(3, 73, 3):
                 lead_hour = int(lead_hour)
-                fc_path = os.path.join(file_path, f"{date_str}_{lead_hour}.npy")
+                fc_path = find_existing(file_candidates(file_path, date_str, lead_hour))
 
-                if not os.path.exists(fc_path):
+                if fc_path is None:
                     continue
 
                 valid_time, init_time = parse_forecast_time(date_str, lead_hour)
                 lead_label = lead_hour // 3 - 1
-                self.samples.append((fc_path, lead_label, lead_hour, valid_time, init_time))
+                self.samples.append((str(fc_path), lead_label, lead_hour, valid_time, init_time))
 
     def __len__(self):
         return len(self.samples)
@@ -627,7 +628,7 @@ def main():
             out_dir = os.path.join(args.output_root, init_time_b)
             os.makedirs(out_dir, exist_ok=True)
 
-            out_path = os.path.join(out_dir, f"{init_time_b}_{lead_hour_b}.npy")
+            out_path = os.path.join(out_dir, ensemble_filename(init_time_b, lead_hour_b))
 
             if os.path.exists(out_path) and not args.overwrite:
                 skipped += 1
