@@ -37,6 +37,24 @@ class StaticExperimentTests(unittest.TestCase):
             text = (ROOT / "scripts" / name).read_text(encoding="utf-8")
             self.assertIn("scalers_stage2_residual_zscore_train.pkl", text)
 
+    def test_figure8_difference_is_corrdiff_minus_serd(self):
+        text = (ROOT / "scripts/evaluate_spatial_crps.py").read_text(encoding="utf-8")
+        self.assertIn("difference=(corrdiff - serd)", text)
+        self.assertNotIn("difference=(serd - corrdiff)", text)
+
+    def test_ngr_and_evaluator_share_canonical_filename(self):
+        ngr = (ROOT / "scripts/infer_ngr_baseline.py").read_text(encoding="utf-8")
+        evaluator = (ROOT / "scripts/evaluate_ensemble.py").read_text(encoding="utf-8")
+        self.assertIn("ensemble_filename(init_time_b, lead_hour_b)", ngr)
+        self.assertIn("sample.ensemble_path(args.sample_root)", evaluator)
+
+    def test_evaluation_requires_common_paper_samples(self):
+        evaluator = (ROOT / "scripts/evaluate_ensemble.py").read_text(encoding="utf-8")
+        runner = (ROOT / "scripts/run_table2_all.sh").read_text(encoding="utf-8")
+        self.assertIn("require_expected_source_count", evaluator)
+        self.assertIn("require_common_method_outputs", evaluator)
+        self.assertIn("validate_common_evaluation_samples.py", runner)
+
 
 if __name__ == "__main__":
     unittest.main()

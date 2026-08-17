@@ -4,13 +4,15 @@ from __future__ import annotations
 import argparse
 import csv
 import glob
-from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 
 from serd.paper.metrics import absolute_coverage_error, empirical_crps, rank_histogram
-from serd.paper.spec import LEAD_HOURS, SURFACE_VARIABLES, file_candidates, find_existing, select_date_split
+from serd.paper.samples import (require_common_method_outputs,
+                                require_expected_source_count,
+                                source_sample_manifest)
+from serd.paper.spec import LEAD_HOURS, SURFACE_VARIABLES
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -46,37 +48,33 @@ def main() -> None:
     inside90 = np.zeros(shape, dtype=np.int64)
     counts = np.zeros(shape, dtype=np.int64)
     rank_counts = np.zeros((len(SURFACE_VARIABLES), 17), dtype=np.int64)
-    missing = 0
+    samples, excluded = source_sample_manifest(
+        sorted(glob.glob(args.target_root_glob)), args.split
+    )
+    require_expected_source_count(samples, args.split)
+    require_common_method_outputs(samples, {"evaluated_method": args.sample_root})
 
-    for day_text in select_date_split(sorted(glob.glob(args.target_root_glob)), args.split):
-        day_dir = Path(day_text)
-        day = datetime.strptime(day_dir.name, "%Y%m%d")
-        date_token = day.strftime("%Y_%m_%d")
-        init_token = day.replace(hour=9).strftime("%Y-%m-%d-%H")
-        for lead_index, lead in enumerate(LEAD_HOURS):
-            sample_path = Path(args.sample_root) / init_token / f"{init_token}_{lead:02d}.npy"
-            analysis_path = find_existing(file_candidates(day_dir, date_token, lead, "_analysis"))
-            if not sample_path.is_file() or analysis_path is None:
-                missing += 1
-                continue
-            ens = load_ensemble(sample_path)[:, :, :args.height, :args.width]
-            obs = np.load(analysis_path).astype(np.float32)[:, :args.height, :args.width]
-            mean = ens.mean(axis=0)
-            spread = ens.std(axis=0, ddof=1)
-            crps = empirical_crps(ens, obs, member_axis=0)
-            for index, variable in enumerate(SURFACE_VARIABLES):
-                del variable
-                error = mean[index] - obs[index]
-                error_sum[lead_index, index] += error.sum()
-                se_sum[lead_index, index] += np.square(error).sum()
-                spread_sum[lead_index, index] += spread[index].sum()
-                crps_sum[lead_index, index] += crps[index].sum()
-                lo80, hi80 = np.quantile(ens[:, index], (.10, .90), axis=0)
-                lo90, hi90 = np.quantile(ens[:, index], (.05, .95), axis=0)
-                inside80[lead_index, index] += np.count_nonzero((obs[index] >= lo80) & (obs[index] <= hi80))
-                inside90[lead_index, index] += np.count_nonzero((obs[index] >= lo90) & (obs[index] <= hi90))
-                counts[lead_index, index] += obs[index].size
-                rank_counts[index] += rank_histogram(ens[:, index], obs[index])
+    for sample in samples:
+        lead_index = LEAD_HOURS.index(sample.lead_hour)
+        sample_path = sample.ensemble_path(args.sample_root)
+        ens = load_ensemble(sample_path)[:, :, :args.height, :args.width]
+        obs = np.load(sample.analysis_path).astype(np.float32)[:, :args.height, :args.width]
+        mean = ens.mean(axis=0)
+        spread = ens.std(axis=0, ddof=1)
+        crps = empirical_crps(ens, obs, member_axis=0)
+        for index, variable in enumerate(SURFACE_VARIABLES):
+            del variable
+            error = mean[index] - obs[index]
+            error_sum[lead_index, index] += error.sum()
+            se_sum[lead_index, index] += np.square(error).sum()
+            spread_sum[lead_index, index] += spread[index].sum()
+            crps_sum[lead_index, index] += crps[index].sum()
+            lo80, hi80 = np.quantile(ens[:, index], (.10, .90), axis=0)
+            lo90, hi90 = np.quantile(ens[:, index], (.05, .95), axis=0)
+            inside80[lead_index, index] += np.count_nonzero((obs[index] >= lo80) & (obs[index] <= hi80))
+            inside90[lead_index, index] += np.count_nonzero((obs[index] >= lo90) & (obs[index] <= hi90))
+            counts[lead_index, index] += obs[index].size
+            rank_counts[index] += rank_histogram(ens[:, index], obs[index])
 
     if not np.any(counts):
         raise RuntimeError("No matched physical ensembles and analysis files were found")
@@ -126,7 +124,10 @@ def main() -> None:
         for variable_index, variable in enumerate(SURFACE_VARIABLES):
             for rank, count in enumerate(rank_counts[variable_index]):
                 writer.writerow((variable, rank, int(count)))
-    print(f"lead_variable_rows={len(rows)} missing_samples={missing}")
+    print(
+        f"lead_variable_rows={len(rows)} matched_samples={len(samples)} "
+        f"source_excluded={len(excluded)} strict_common_samples=ok"
+    )
 
 
 if __name__ == "__main__":

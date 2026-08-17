@@ -10,9 +10,10 @@ from pathlib import Path
 import numpy as np
 
 from serd.paper.spec import LEAD_HOURS, file_candidates, find_existing, select_date_split, validate_forecast_shape
+from serd.paper.samples import EXPECTED_POST_QC_SAMPLES
 
 
-EXPECTED_COUNTS = {"train": 32560, "valid": 2208, "test": 8685}
+EXPECTED_COUNTS = EXPECTED_POST_QC_SAMPLES
 
 
 def main() -> None:

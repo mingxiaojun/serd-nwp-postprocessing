@@ -17,6 +17,11 @@ The unified split is:
 
 All training, inference, baselines, and evaluation scripts select this split by date. The reported 32,560/2,208/8,685 sample counts are post-QC checks, not slicing indices.
 
+The paper evaluator uses one canonical source manifest requiring forecast, physical error, and analysis
+for every included key. It rejects an incorrect split count or a missing method output instead of
+silently evaluating different methods on different subsets. All ensemble outputs use a zero-padded
+two-digit lead suffix, including `_03.npy`, `_06.npy`, and `_09.npy`.
+
 The 45 forecast channels contain five nine-channel blocks: one near-surface field followed by its eight pressure-level fields at 925, 850, 700, 500, 300, 200, 150, and 100 hPa. The model therefore receives five surface fields plus a `5 x 8` upper-air tensor.
 
 Stage 1 uses raw physical total error (`analysis - forecast`) and the five loss weights `0.10/0.50/0.20/0.15/0.03`. Stage 2 uses `total error - stage-1 error` and fits a separate scaler from training residuals only.
