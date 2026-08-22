@@ -54,6 +54,9 @@ The example contains 32 complete forecast/error/analysis triplets:
 - `20241229`: 20 lead times from 3 to 60 h
 - `20241230`: 12 lead times from 3 to 36 h
 
+The stored arrays are 200 × 200 before the spatial cropping/preprocessing step
+used to obtain the 192 × 192 model domain.
+
 Run the example-data integrity check from the repository root:
 
 ```bash

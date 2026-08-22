@@ -11,6 +11,9 @@ variable followed by its eight corresponding upper-air variables, repeated for
 the five target-variable groups. Each physical-unit error array and analysis
 array has shape `[5, 200, 200]`.
 
+The stored arrays are 200 × 200 before the spatial cropping/preprocessing step
+used to obtain the 192 × 192 model domain.
+
 Filename examples:
 
 - forecast: `2024_12_29_48.npy`
