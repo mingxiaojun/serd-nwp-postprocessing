@@ -3,7 +3,7 @@ experiment:
   table2_name: CMA-GFS
   purpose: Original deterministic forecast baseline.
 data:
-  data_root_glob: /online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]
+  data_root_glob: ./example_data/CMA_gfs_time_order_3_72/*[0-9]
   data_dir: ./data
   train_dates: [2020-01-01, 2023-09-30]
   valid_dates: [2023-10-01, 2023-12-31]

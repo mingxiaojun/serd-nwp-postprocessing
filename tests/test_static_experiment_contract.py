@@ -9,6 +9,20 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class StaticExperimentTests(unittest.TestCase):
+    def test_no_private_server_data_path_remains(self):
+        private_root = "/online1/linxin_group/wangmingming/data"
+        paths = [
+            *ROOT.glob("serd/**/*.py"),
+            *ROOT.glob("scripts/*"),
+            *ROOT.glob("configs/**/*.yaml"),
+            ROOT / "README.md",
+        ]
+        for path in paths:
+            if not path.is_file():
+                continue
+            with self.subTest(path=path):
+                self.assertNotIn(private_root, path.read_text(encoding="utf-8-sig"))
+
     def test_all_python_files_parse(self):
         for path in [*ROOT.glob("serd/**/*.py"), *ROOT.glob("scripts/*.py")]:
             with self.subTest(path=path):

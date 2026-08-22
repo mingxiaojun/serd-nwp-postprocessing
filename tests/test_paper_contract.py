@@ -18,6 +18,19 @@ from serd.paper.spec import (FORECAST_CHANNELS, PAPER_SPEC, PRESSURE_LEVELS_HPA,
 
 
 class PaperContractTests(unittest.TestCase):
+    def test_default_data_path_is_bundled_example(self):
+        self.assertEqual(PAPER_SPEC.data_root, "./example_data/CMA_gfs_time_order_3_72")
+
+    def test_example_sample_inventory(self):
+        root = Path(__file__).parents[1] / "example_data" / "CMA_gfs_time_order_3_72"
+        samples, _ = source_sample_manifest([root / "20241229", root / "20241230"], "test")
+        self.assertEqual(len(samples), 32)
+        observed = {}
+        for sample in samples:
+            observed.setdefault(sample.day_dir.name, []).append(sample.lead_hour)
+        self.assertEqual(tuple(sorted(observed["20241229"])), tuple(range(3, 61, 3)))
+        self.assertEqual(tuple(sorted(observed["20241230"])), tuple(range(3, 37, 3)))
+
     def test_dates_are_explicit(self):
         self.assertEqual(PAPER_SPEC.split_for(date(2023, 9, 30)), "train")
         self.assertEqual(PAPER_SPEC.split_for(date(2023, 10, 1)), "valid")

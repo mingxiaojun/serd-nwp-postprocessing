@@ -15,7 +15,7 @@ from serd.paper.spec import (LEAD_HOURS, SURFACE_CHANNEL_INDICES, file_candidate
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data_root_glob", default="/online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]")
+    parser.add_argument("--data_root_glob", default="./example_data/CMA_gfs_time_order_3_72/*[0-9]")
     parser.add_argument("--stage1_prediction_root", required=True)
     parser.add_argument("--output_root", default="./data/stage2_residuals_serd_v1")
     parser.add_argument("--total_error_scaler_path", default="./data/scalers_err_zscore_train.pkl")

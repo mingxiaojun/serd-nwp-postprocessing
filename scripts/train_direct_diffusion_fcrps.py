@@ -1,4 +1,4 @@
-﻿import os
+import os
 import time
 import glob
 import argparse
@@ -53,7 +53,7 @@ def build_parser():
     parser.add_argument(
         "--data_root_glob",
         type=str,
-        default="/online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]",
+        default="./example_data/CMA_gfs_time_order_3_72/*[0-9]",
     )
     parser.add_argument(
         "--topo_path",

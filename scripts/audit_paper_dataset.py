@@ -18,7 +18,7 @@ EXPECTED_COUNTS = EXPECTED_POST_QC_SAMPLES
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data_root_glob", default="/online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]")
+    parser.add_argument("--data_root_glob", default="./example_data/CMA_gfs_time_order_3_72/*[0-9]")
     parser.add_argument("--out_dir", default="./outputs/manifests")
     parser.add_argument("--strict", action="store_true", help="Fail when regenerated counts differ from the manuscript")
     args = parser.parse_args()

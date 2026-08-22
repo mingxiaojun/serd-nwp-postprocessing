@@ -39,7 +39,37 @@ configs/
   table2/
 docs/
   EXPERIMENT_DESIGN.md
+example_data/
+  CMA_gfs_time_order_3_72/  two-day Git LFS example dataset
 ```
+
+## Example Dataset
+
+This repository includes a two-day example dataset under
+`example_data/CMA_gfs_time_order_3_72/`. The files are stored with Git LFS, so
+clone the repository with Git LFS installed or run `git lfs pull` after cloning.
+
+The example contains 32 complete forecast/error/analysis triplets:
+
+- `20241229`: 20 lead times from 3 to 60 h
+- `20241230`: 12 lead times from 3 to 36 h
+
+Run the example-data integrity check from the repository root:
+
+```bash
+python scripts/validate_example_data.py
+```
+
+All code and configuration defaults resolve the source data from:
+
+```text
+./example_data/CMA_gfs_time_order_3_72/*[0-9]
+```
+
+The example is intended for inspecting the file contract and testing data
+loading. It contains test-period dates only and is not sufficient for model
+training, strict paper-sample validation, or reproducing the reported results.
+Set `DATA_ROOT_GLOB` or pass `--data_root_glob` to use the complete dataset.
 
 ## Table 2 Experiments
 
@@ -66,10 +96,10 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-Run the recommended SERD pipeline:
+Run the recommended SERD pipeline with the complete paper dataset:
 
 ```bash
-export DATA_ROOT_GLOB="/online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]"
+export DATA_ROOT_GLOB="/path/to/full/CMA_gfs_time_order_3_72/*[0-9]"
 export DATA_DIR="./data"
 export TOPO_PATH="./data/topo_data_Normalization.npy"
 bash scripts/run_serd_v1_pipeline.sh
@@ -83,7 +113,8 @@ The pipeline performs:
 4. Train the stage-2 VE-SDE residual diffusion model with score loss + fCRPS and select best checkpoint on validation split.
 5. Generate 16-member final forecast ensembles in physical units.
 
-Because the original exclusion list is unavailable, regenerate and verify it before training:
+Because the original exclusion list is unavailable, regenerate and verify it
+against the complete dataset before training:
 
 ```bash
 python scripts/audit_paper_dataset.py --strict
@@ -102,16 +133,19 @@ Evaluate test ensembles:
 ```bash
 python scripts/evaluate_ensemble.py \
   --sample_root ./outputs/predictions/serd_v1/stage2_serd \
-  --target_root_glob "/online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]" \
+  --target_root_glob "./example_data/CMA_gfs_time_order_3_72/*[0-9]" \
   --split test \
   --out_dir ./outputs/metrics/serd_v1
 ```
 
 ## Data availability
 
-The CMA-GFS reforecast data and CMA-RRA reanalysis data used in this study are not redistributed in this repository due to data access restrictions. Users should request access from the CMA Earth System Modeling and Prediction Centre (CEMC), China Meteorological Administration.
-
-This repository provides the model code, configuration files, training/inference scripts, and evaluation pipeline. Users need to prepare the input data following the same forecast-analysis pairing and preprocessing procedure described in the paper.
+The complete CMA-GFS reforecast and CMA-RRA reanalysis datasets used in this
+study are not redistributed. A small two-day example is included through Git
+LFS to document the forecast-analysis pairing, array shapes, channel order, and
+filename convention. Users need to obtain the complete source data from the CMA
+Earth System Modeling and Prediction Centre (CEMC), China Meteorological
+Administration, to reproduce training and the paper results.
 
 
 ## Checkpoint Naming
