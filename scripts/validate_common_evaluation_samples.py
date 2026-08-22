@@ -25,7 +25,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--target_root_glob",
-        default="/online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]",
+        default="./example_data/CMA_gfs_time_order_3_72/*[0-9]",
     )
     parser.add_argument("--split", choices=("train", "valid", "test"), default="test")
     parser.add_argument(

@@ -25,6 +25,6 @@ python scripts/infer_twostage_no_fcrps.py \
 
 python scripts/evaluate_ensemble.py \
   --sample_root ./outputs/predictions/twostage_no_fcrps \
-  --target_root_glob "${DATA_ROOT_GLOB:-/online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]}" \
+  --target_root_glob "${DATA_ROOT_GLOB:-./example_data/CMA_gfs_time_order_3_72/*[0-9]}" \
   --split test \
   --out_dir ./outputs/metrics/twostage_no_fcrps

@@ -19,7 +19,7 @@ SURFACE_CHANNEL_INDICES = (0, 9, 18, 27, 36)
 
 @dataclass(frozen=True)
 class PaperSpec:
-    data_root: str = "/online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72"
+    data_root: str = "./example_data/CMA_gfs_time_order_3_72"
     train_start: date = date(2020, 1, 1)
     train_end: date = date(2023, 9, 30)
     valid_start: date = date(2023, 10, 1)

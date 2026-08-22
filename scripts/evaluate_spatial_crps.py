@@ -17,7 +17,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--serd_root", default="./outputs/predictions/serd_v1/stage2_serd")
     parser.add_argument("--corrdiff_root", default="./outputs/predictions/corrdiff")
-    parser.add_argument("--target_root_glob", default="/online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]")
+    parser.add_argument("--target_root_glob", default="./example_data/CMA_gfs_time_order_3_72/*[0-9]")
     parser.add_argument("--out_path", default="./outputs/metrics/figure8_t2m_spatial_crps.npz")
     parser.add_argument("--height", type=int, default=192)
     parser.add_argument("--width", type=int, default=192)

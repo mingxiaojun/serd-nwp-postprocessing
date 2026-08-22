@@ -3,7 +3,7 @@ experiment:
   description: Systematic-error-corrected residual diffusion for multivariate near-surface NWP post-processing.
 
 data:
-  data_root_glob: /online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]
+  data_root_glob: ./example_data/CMA_gfs_time_order_3_72/*[0-9]
   data_dir: ./data
   topo_path: ./data/topo_data_Normalization.npy
   train_dates: [2020-01-01, 2023-09-30]

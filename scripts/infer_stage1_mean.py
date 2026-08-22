@@ -1,4 +1,4 @@
-﻿import os
+import os
 
 # 蹇呴』鍦?import torch 涔嬪墠璁剧疆
 os.environ.setdefault("TRITON_CACHE_DIR", "./outputs/cache/triton_cache")
@@ -38,7 +38,7 @@ parser.add_argument("--batch_size", type=int, default=3)
 parser.add_argument("--num_workers", type=int, default=7)
 
 parser.add_argument("--data_dir", type=str, default="./data")
-parser.add_argument("--data_root_glob", type=str, default="/online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]")
+parser.add_argument("--data_root_glob", type=str, default="./example_data/CMA_gfs_time_order_3_72/*[0-9]")
 parser.add_argument("--target", choices=["error", "analysis"], default="error")
 parser.add_argument("--target_scaler_path", default=None)
 parser.add_argument("--topo_path", type=str, default="./data/topo_data_Normalization.npy")

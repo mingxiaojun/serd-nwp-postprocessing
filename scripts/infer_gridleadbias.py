@@ -14,7 +14,7 @@ from serd.paper.spec import LEAD_HOURS, SURFACE_CHANNEL_INDICES, file_candidates
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--params_path", default="./outputs/checkpoints/gridleadbias/allvars_gridlead_bias_params.npz")
-    parser.add_argument("--data_root_glob", default="/online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]")
+    parser.add_argument("--data_root_glob", default="./example_data/CMA_gfs_time_order_3_72/*[0-9]")
     parser.add_argument("--output_root", default="./outputs/predictions/gridleadbias")
     parser.add_argument("--split", choices=("train", "valid", "test", "all"), default="test")
     parser.add_argument("--ensemble_size", type=int, default=16)

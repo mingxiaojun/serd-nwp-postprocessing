@@ -18,7 +18,7 @@ from serd.paper.spec import LEAD_HOURS, SURFACE_VARIABLES
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sample_root", required=True, help="Final physical ensembles [16,5,H,W]")
-    parser.add_argument("--target_root_glob", default="/online1/linxin_group/wangmingming/data/CMA_gfs_time_order_3_72/*[0-9]")
+    parser.add_argument("--target_root_glob", default="./example_data/CMA_gfs_time_order_3_72/*[0-9]")
     parser.add_argument("--out_dir", default="./outputs/metrics")
     parser.add_argument("--split", default="test", choices=("train", "valid", "test"))
     parser.add_argument("--height", type=int, default=192)
